@@ -125,11 +125,16 @@ remains end-to-end encrypted and unreadable by any server.
 - [x] Verified via `scripts/messaging-check.ts` (relay, decrypt, ciphertext-only, receipts, presence).
 - Note: relay-only this phase — offline/history persistence is Phase 6.
 
-### Phase 6 — Persistence toggle
-- [ ] Per-conversation persist flag (negotiated; both must agree).
-- [ ] When ON: write `{ciphertext, iv}` to DO storage; replay history on room join.
-- [ ] When OFF: relay only; optional local-only IndexedDB cache.
-- [ ] "Delete history" wipes the room's stored blobs.
+### Phase 6 — Persistence toggle ✅
+- [x] Per-conversation persist flag (negotiated; effective = AND of both members' prefs).
+- [x] When ON: write `{ciphertext, iv}` blobs to DO storage; replay history on room join.
+- [x] When OFF: relay only (nothing stored).
+- [x] "Clear history" wipes the room's stored blobs (broadcast to both).
+- [x] Key-unlock gate: unwrapped key cached in IndexedDB (survives reload); passphrase
+      prompt only when needed; "Open" gated on key-ready to avoid a derive race.
+- [x] Verified via `scripts/persistence-check.ts` (ephemeral vs stored, replay, clear).
+- Known gap: conversation LIST doesn't persist across reload yet (handshake re-needed);
+  stored message history does. Candidate for a Phase 7 polish item.
 
 ### Phase 7 — UX polish
 - [ ] Conversation list, unread badges, typing indicators.

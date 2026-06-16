@@ -10,8 +10,15 @@ import {
   saveIdentity,
   loadIdentity,
   getWrappedKey,
+  storeUnwrappedKey,
+  loadUnwrappedKey,
+  clearUnwrappedKeys,
 } from "@/lib/crypto/idb";
-import { setUnlockedKey, clearUnlockedKey } from "@/lib/crypto/session-key";
+import {
+  setUnlockedKey,
+  clearUnlockedKey,
+  getUnlockedKey,
+} from "@/lib/crypto/session-key";
 import { clearConversationKeys } from "@/lib/crypto/keystore";
 
 export type AuthResult = {
@@ -56,7 +63,10 @@ export async function signup(
   const wrapped = await wrapPrivateKey(keyPair.privateKey, password);
   await saveIdentity({ userId, username, publicKeyBase64, ...wrapped });
 
-  setUnlockedKey(keyPair.privateKey);
+  // Use the non-extractable unwrapped key everywhere (cache survives reloads).
+  const privateKey = await unwrapPrivateKey(wrapped, password);
+  setUnlockedKey(privateKey);
+  await storeUnwrappedKey(userId, privateKey);
   return { userId, username };
 }
 
@@ -82,11 +92,51 @@ export async function login(
   // Unwrap throws if the passphrase is wrong (AES-GCM auth failure).
   const privateKey = await unwrapPrivateKey(getWrappedKey(identity), password);
   setUnlockedKey(privateKey);
+  await storeUnwrappedKey(userId, privateKey);
   return { userId, username, hasLocalKey: true };
+}
+
+export type UnlockStatus = "ready" | "needs-passphrase" | "no-key";
+
+/**
+ * Ensure the private key is unlocked for this user without requiring a fresh
+ * login. Called on app load: reuses the in-memory key, else the IndexedDB
+ * unwrapped-key cache (survives reloads), else reports whether a passphrase
+ * unlock is possible (wrapped key present) or the device simply has no key.
+ */
+export async function ensureUnlockedKey(userId: string): Promise<UnlockStatus> {
+  if (getUnlockedKey()) return "ready";
+
+  const cached = await loadUnwrappedKey(userId);
+  if (cached) {
+    setUnlockedKey(cached);
+    return "ready";
+  }
+
+  const identity = await loadIdentity(userId);
+  return identity ? "needs-passphrase" : "no-key";
+}
+
+/** Unlock the local private key with the passphrase (manual unlock gate). */
+export async function unlockIdentity(
+  userId: string,
+  password: string,
+): Promise<{ ok: boolean; error?: string }> {
+  const identity = await loadIdentity(userId);
+  if (!identity) return { ok: false, error: "No key stored on this device." };
+  try {
+    const privateKey = await unwrapPrivateKey(getWrappedKey(identity), password);
+    setUnlockedKey(privateKey);
+    await storeUnwrappedKey(userId, privateKey);
+    return { ok: true };
+  } catch {
+    return { ok: false, error: "Wrong passphrase." };
+  }
 }
 
 export async function logout(): Promise<void> {
   clearUnlockedKey();
   clearConversationKeys();
+  await clearUnwrappedKeys();
   await postJson("/api/auth/logout", {});
 }

@@ -21,6 +21,8 @@ export type ChatState = {
   peerOnline: boolean;
   peerTyping: boolean;
   keyReady: boolean;
+  persistMine: boolean;
+  persistEffective: boolean;
 };
 
 const RANK: Record<ReceiptState, number> = { delivered: 1, read: 2 };
@@ -29,17 +31,30 @@ function randomId(): string {
   return crypto.randomUUID();
 }
 
+function mergeById(existing: ChatMessage[], incoming: ChatMessage[]): ChatMessage[] {
+  const byId = new Map(existing.map((m) => [m.id, m]));
+  for (const m of incoming) if (!byId.has(m.id)) byId.set(m.id, m);
+  return [...byId.values()].sort((a, b) => a.sentAt - b.sentAt);
+}
+
 /**
  * Drives a single conversation: opens the conversation room socket, encrypts on
  * send and decrypts on receive with the conversation key from the keystore, and
- * tracks delivery/read receipts, typing, and peer room-presence.
+ * tracks delivery/read receipts, typing, peer room-presence, persistence state,
+ * and replayed history.
  */
-export function useChat(conversationId: string, peerUserId: string) {
+export function useChat(
+  conversationId: string,
+  peerUserId: string,
+  selfUserId: string,
+) {
   const [state, setState] = useState<ChatState>({
     messages: [],
     peerOnline: false,
     peerTyping: false,
     keyReady: getConversationKey(conversationId) !== null,
+    persistMine: false,
+    persistEffective: false,
   });
   const socketRef = useRef<ReturnType<typeof createConversationSocket> | null>(
     null,
@@ -114,6 +129,40 @@ export function useChat(conversationId: string, peerUserId: string) {
         case "peer:presence":
           setState((s) => ({ ...s, peerOnline: msg.online }));
           return;
+        case "persist:state":
+          setState((s) => ({
+            ...s,
+            persistMine: msg.mine,
+            persistEffective: msg.effective,
+          }));
+          return;
+        case "history": {
+          if (!aesKey) return;
+          const decrypted: ChatMessage[] = [];
+          for (const m of msg.messages) {
+            let text: string;
+            try {
+              text = await decryptMessage(aesKey, {
+                ciphertext: m.ciphertext,
+                iv: m.iv,
+              });
+            } catch {
+              text = "⚠️ could not decrypt message";
+            }
+            decrypted.push({
+              id: m.id,
+              mine: m.from === selfUserId,
+              text,
+              sentAt: m.sentAt,
+              status: "read",
+            });
+          }
+          setState((s) => ({ ...s, messages: mergeById(s.messages, decrypted) }));
+          return;
+        }
+        case "history:cleared":
+          setState((s) => ({ ...s, messages: [] }));
+          return;
       }
     };
 
@@ -181,7 +230,22 @@ export function useChat(conversationId: string, peerUserId: string) {
     }
   }, []);
 
-  return { ...state, keyReady: key !== null, sendText, setTyping };
+  const setPersist = useCallback((on: boolean) => {
+    socketRef.current?.send(JSON.stringify({ type: "persist:set", on }));
+  }, []);
+
+  const clearHistory = useCallback(() => {
+    socketRef.current?.send(JSON.stringify({ type: "history:clear" }));
+  }, []);
+
+  return {
+    ...state,
+    keyReady: key !== null,
+    sendText,
+    setTyping,
+    setPersist,
+    clearHistory,
+  };
 }
 
 function rankUp(current: MessageStatus, next: ReceiptState): boolean {

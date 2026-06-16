@@ -3,6 +3,7 @@ import { getSession } from "@/lib/session";
 import Brand from "@/components/Brand";
 import LogoutButton from "@/components/LogoutButton";
 import Dashboard from "@/components/Dashboard";
+import UnlockGate from "@/components/UnlockGate";
 
 const FEATURES = [
   { k: "e2e", label: "End-to-end encrypted", note: "ECDH + AES-GCM in your browser" },
@@ -33,7 +34,9 @@ export default async function Home() {
         </header>
 
         <main className="mx-auto w-full max-w-3xl flex-1 px-4 py-6 sm:px-6 sm:py-10">
-          <Dashboard selfUserId={session.userId} />
+          <UnlockGate userId={session.userId} username={session.username}>
+            <Dashboard selfUserId={session.userId} />
+          </UnlockGate>
         </main>
       </div>
     );

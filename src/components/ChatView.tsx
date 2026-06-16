@@ -6,14 +6,26 @@ import type { Conversation } from "@/lib/protocol";
 
 export default function ChatView({
   conversation,
+  selfUserId,
   onBack,
 }: {
   conversation: Conversation;
+  selfUserId: string;
   onBack: () => void;
 }) {
   const { peer, conversationId } = conversation;
-  const { messages, peerOnline, peerTyping, keyReady, sendText, setTyping } =
-    useChat(conversationId, peer.userId);
+  const {
+    messages,
+    peerOnline,
+    peerTyping,
+    keyReady,
+    persistMine,
+    persistEffective,
+    sendText,
+    setTyping,
+    setPersist,
+    clearHistory,
+  } = useChat(conversationId, peer.userId, selfUserId);
 
   const [draft, setDraft] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -60,12 +72,53 @@ export default function ChatView({
         </span>
       </header>
 
+      {/* Persistence controls */}
+      <div className="flex items-center justify-between gap-2 border-b border-border-soft px-4 py-2">
+        <button
+          onClick={() => setPersist(!persistMine)}
+          disabled={!keyReady}
+          className="flex items-center gap-2 text-xs disabled:opacity-50"
+          title="Both people must enable saving for history to persist"
+        >
+          <span
+            className={`relative inline-flex h-4 w-7 items-center rounded-full transition-colors ${
+              persistMine ? "bg-accent" : "bg-surface-strong"
+            }`}
+          >
+            <span
+              className={`inline-block h-3 w-3 transform rounded-full bg-bg transition-transform ${
+                persistMine ? "translate-x-3.5" : "translate-x-0.5"
+              }`}
+            />
+          </span>
+          <span className="text-muted">
+            {persistEffective ? (
+              <span className="text-accent">saving history</span>
+            ) : persistMine ? (
+              "waiting for peer to enable"
+            ) : (
+              "save history"
+            )}
+          </span>
+        </button>
+        <button
+          onClick={() => {
+            if (confirm("Delete the stored history for this conversation?")) {
+              clearHistory();
+            }
+          }}
+          className="text-xs text-faint hover:text-danger"
+        >
+          Clear history
+        </button>
+      </div>
+
       {/* Messages */}
       <div ref={scrollRef} className="flex-1 space-y-2 overflow-y-auto px-4 py-4">
         {!keyReady && (
           <Banner>
-            Encryption key isn&apos;t loaded on this device. Re-establish the
-            conversation to chat. (Durable history arrives in Phase 6.)
+            Encryption key isn&apos;t loaded yet. If this persists, unlock your
+            keys on the home screen.
           </Banner>
         )}
         {keyReady && messages.length === 0 && (

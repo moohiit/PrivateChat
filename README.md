@@ -51,7 +51,7 @@ terminal, modern glass" look — deep ink background, phosphor-lime accent, mono
 identifiers, glass cards, subtle grid + glow. Mobile-first and fully responsive.
 
 ## Status
-**Phases 0–5 complete.**
+**Phases 0–6 complete.**
 - Phase 0: scaffold, deps, PartyKit skeleton, Turso client + migration, env.
 - Phase 1: signup/login/logout/me + username lookup + PartyKit connect-token APIs;
   client-side ECDH keygen, passphrase-wrapped private key in IndexedDB; signup/login UI.
@@ -63,12 +63,15 @@ identifiers, glass cards, subtle grid + glow. Mobile-first and fully responsive.
   keystore, and a verifiable 60-digit safety number per conversation.
 - Phase 5: membership-authorized conversation rooms; end-to-end encrypted messaging
   (encrypt on send / decrypt on receive), delivery/read receipts, typing, peer
-  presence, and a full ChatView. Server relays ciphertext only (relay-only;
-  durable history is Phase 6).
+  presence, and a full ChatView. Server relays ciphertext only.
+- Phase 6: per-conversation persistence toggle (both must opt in), ciphertext-only
+  history in DO storage with replay-on-join and clear-history; key-unlock gate so
+  the private key survives page reloads (passphrase prompt only when needed).
 
 Verify scripts:
 - Realtime (needs `npm run party:dev`): `npx tsx scripts/presence-check.ts`,
-  `npx tsx scripts/handshake-check.ts`, `npx tsx scripts/messaging-check.ts`.
+  `npx tsx scripts/handshake-check.ts`, `npx tsx scripts/messaging-check.ts`,
+  `npx tsx scripts/persistence-check.ts`.
 - Crypto (standalone): `npx tsx scripts/crypto-check.ts`.
 
-Next: **Phase 6 — Persistence toggle** (see ROADMAP.md).
+Next: **Phase 7 — UX polish** (see ROADMAP.md).

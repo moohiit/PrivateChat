@@ -39,6 +39,15 @@ export type LobbyServerMessage =
 
 export type ReceiptState = "delivered" | "read";
 
+/** A persisted message blob (ciphertext only) stored in DO storage. */
+export type StoredMessage = {
+  id: string;
+  from: string;
+  ciphertext: string;
+  iv: string;
+  sentAt: number;
+};
+
 /** Conversation room: messages the browser sends. Bodies are ciphertext only. */
 export type ChatClientMessage =
   | {
@@ -49,7 +58,9 @@ export type ChatClientMessage =
       sentAt: number;
     }
   | { type: "receipt"; id: string; state: ReceiptState }
-  | { type: "typing"; on: boolean };
+  | { type: "typing"; on: boolean }
+  | { type: "persist:set"; on: boolean }
+  | { type: "history:clear" };
 
 /** Conversation room: messages the server pushes. */
 export type ChatServerMessage =
@@ -63,4 +74,7 @@ export type ChatServerMessage =
     }
   | { type: "receipt"; id: string; state: ReceiptState }
   | { type: "peer:typing"; on: boolean }
-  | { type: "peer:presence"; online: boolean };
+  | { type: "peer:presence"; online: boolean }
+  | { type: "persist:state"; mine: boolean; effective: boolean }
+  | { type: "history"; messages: StoredMessage[] }
+  | { type: "history:cleared" };

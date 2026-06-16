@@ -14,12 +14,18 @@ export default function Dashboard({ selfUserId }: { selfUserId: string }) {
 }
 
 function DashboardInner() {
-  const { status, error, clearError, conversations } = useLobby();
+  const { status, error, clearError, conversations, selfUserId } = useLobby();
   const [openId, setOpenId] = useState<string | null>(null);
 
   const active = conversations.find((c) => c.conversationId === openId) ?? null;
   if (active) {
-    return <ChatView conversation={active} onBack={() => setOpenId(null)} />;
+    return (
+      <ChatView
+        conversation={active}
+        selfUserId={selfUserId}
+        onBack={() => setOpenId(null)}
+      />
+    );
   }
 
   return (
@@ -193,7 +199,8 @@ function RequestsCard() {
 }
 
 function OnlineCard({ onOpen }: { onOpen: (c: Conversation) => void }) {
-  const { online, selfUserId, sentTo, sendRequest, conversations } = useLobby();
+  const { online, selfUserId, sentTo, sendRequest, conversations, convoCrypto } =
+    useLobby();
   const others = online.filter((u) => u.userId !== selfUserId);
   const convoFor = (id: string) =>
     conversations.find((c) => c.peer.userId === id) ?? null;
@@ -220,9 +227,14 @@ function OnlineCard({ onOpen }: { onOpen: (c: Conversation) => void }) {
                 {convo ? (
                   <button
                     onClick={() => onOpen(convo)}
-                    className="btn-accent rounded-md px-3 py-1.5 text-xs font-semibold"
+                    disabled={
+                      convoCrypto[convo.conversationId]?.status !== "ready"
+                    }
+                    className="btn-accent rounded-md px-3 py-1.5 text-xs font-semibold disabled:opacity-50"
                   >
-                    Open
+                    {convoCrypto[convo.conversationId]?.status === "ready"
+                      ? "Open"
+                      : "…"}
                   </button>
                 ) : sentTo.includes(u.userId) ? (
                   <span className="text-xs text-faint">requested</span>
@@ -308,7 +320,8 @@ function ConversationRow({
           )}
           <button
             onClick={onOpen}
-            className="btn-accent rounded-md px-3 py-1 text-xs font-semibold"
+            disabled={status !== "ready"}
+            className="btn-accent rounded-md px-3 py-1 text-xs font-semibold disabled:opacity-50"
           >
             Open
           </button>
