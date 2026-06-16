@@ -45,10 +45,18 @@ npm run dev         # Next.js app on http://localhost:3000
   `npx partykit env add JWT_SECRET` (must equal Vercel's `JWT_SECRET`).
 - **Turso:** `turso db create privatechat`, then wire the URL/token into Vercel.
 
+## Design
+Custom brand system in [src/app/globals.css](src/app/globals.css): an "encrypted
+terminal, modern glass" look — deep ink background, phosphor-lime accent, monospace
+identifiers, glass cards, subtle grid + glow. Mobile-first and fully responsive.
+
 ## Status
-**Phase 0 + Phase 1 complete.**
+**Phases 0–2 complete.**
 - Phase 0: scaffold, deps, PartyKit skeleton, Turso client + migration, env.
 - Phase 1: signup/login/logout/me + username lookup + PartyKit connect-token APIs;
   client-side ECDH keygen, passphrase-wrapped private key in IndexedDB; signup/login UI.
+- Phase 2: PartyKit lobby with JWT-authenticated connections + live presence
+  (snapshot / online / offline); responsive branded UI. Dev server on port 1999;
+  verified by `npx tsx scripts/presence-check.ts`.
 
-Next: **Phase 2 — PartyKit transport & presence** (see ROADMAP.md).
+Next: **Phase 3 — Chat requests (the handshake)** (see ROADMAP.md).

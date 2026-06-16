@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "party:dev": "partykit dev",
+    "party:dev": "partykit dev --port 1999",
     "party:deploy": "partykit deploy",
     "migrate": "tsx scripts/migrate.ts"
   },

@@ -1,26 +1,165 @@
 @import "tailwindcss";
 
+/*
+ * PrivateChat brand system — "encrypted terminal, modern glass".
+ * Deep ink background, phosphor-lime signature accent, monospace identifiers,
+ * thin-bordered glass surfaces, subtle grid + glow. Dark-first; mobile-first.
+ */
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --bg: #07090c;
+  --bg-elevated: #0c1014;
+  --surface: rgba(255, 255, 255, 0.03);
+  --surface-strong: rgba(255, 255, 255, 0.05);
+  --border: rgba(255, 255, 255, 0.09);
+  --border-strong: rgba(255, 255, 255, 0.16);
+  --foreground: #e7ecef;
+  --muted: rgba(231, 236, 239, 0.58);
+  --faint: rgba(231, 236, 239, 0.38);
+
+  /* Signature accent: phosphor lime + a cool secondary */
+  --accent: #b6ff3c;
+  --accent-strong: #c9ff6e;
+  --accent-ink: #0a1400;
+  --accent-glow: rgba(182, 255, 60, 0.22);
+  --secondary: #6ee7ff;
+  --danger: #ff6b6b;
+  --warn: #ffce5c;
 }
 
 @theme inline {
-  --color-background: var(--background);
+  --color-bg: var(--bg);
+  --color-bg-elevated: var(--bg-elevated);
+  --color-surface: var(--surface);
+  --color-surface-strong: var(--surface-strong);
+  --color-border-soft: var(--border);
+  --color-border-strong: var(--border-strong);
   --color-foreground: var(--foreground);
+  --color-muted: var(--muted);
+  --color-faint: var(--faint);
+  --color-accent: var(--accent);
+  --color-accent-strong: var(--accent-strong);
+  --color-accent-ink: var(--accent-ink);
+  --color-secondary: var(--secondary);
+  --color-danger: var(--danger);
+  --color-warn: var(--warn);
+
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+* {
+  border-color: var(--border);
+}
+
+html {
+  background: var(--bg);
+  color: var(--foreground);
+  -webkit-text-size-adjust: 100%;
 }
 
 body {
-  background: var(--background);
+  background: var(--bg);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
+  /* Ambient glow + faint grid — the brand backdrop. */
+  background-image:
+    radial-gradient(
+      60rem 60rem at 50% -20%,
+      var(--accent-glow),
+      transparent 60%
+    ),
+    radial-gradient(
+      40rem 40rem at 100% 0%,
+      rgba(110, 231, 255, 0.08),
+      transparent 55%
+    ),
+    linear-gradient(transparent 95%, rgba(255, 255, 255, 0.035) 95%),
+    linear-gradient(90deg, transparent 95%, rgba(255, 255, 255, 0.035) 95%);
+  background-size:
+    100% 100%,
+    100% 100%,
+    2.4rem 2.4rem,
+    2.4rem 2.4rem;
+  background-attachment: fixed;
+  min-height: 100dvh;
+}
+
+/* Identifiers (usernames, fingerprints) read as "machine" text. */
+.identifier {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  letter-spacing: -0.01em;
+}
+
+/* Glass surface card. */
+.surface {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+}
+
+/* Primary action: solid accent with glow. */
+.btn-accent {
+  background: var(--accent);
+  color: var(--accent-ink);
+  box-shadow: 0 0 0 1px rgba(182, 255, 60, 0.4), 0 8px 30px -10px var(--accent-glow);
+  transition: transform 0.12s ease, box-shadow 0.2s ease, background 0.2s ease;
+}
+.btn-accent:hover {
+  background: var(--accent-strong);
+  box-shadow: 0 0 0 1px rgba(201, 255, 110, 0.6), 0 10px 36px -8px var(--accent-glow);
+}
+.btn-accent:active {
+  transform: translateY(1px);
+}
+.btn-accent:disabled {
+  opacity: 0.5;
+  box-shadow: none;
+}
+
+/* Secondary / ghost action. */
+.btn-ghost {
+  background: var(--surface-strong);
+  border: 1px solid var(--border-strong);
+  color: var(--foreground);
+  transition: background 0.2s ease, border-color 0.2s ease;
+}
+.btn-ghost:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: var(--accent);
+}
+
+/* Text inputs. */
+.field {
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid var(--border);
+  border-radius: 0.625rem;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease;
+}
+.field:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(182, 255, 60, 0.14);
+}
+.field::placeholder {
+  color: var(--faint);
+}
+
+/* Live status dot. */
+.dot {
+  box-shadow: 0 0 0 3px rgba(182, 255, 60, 0.18);
+}
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+.dot-live {
+  animation: pulse-dot 1.8s ease-in-out infinite;
+}
+
+::selection {
+  background: rgba(182, 255, 60, 0.28);
+  color: #fff;
 }

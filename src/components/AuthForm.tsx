@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { signup, login } from "@/lib/client/auth";
+import Brand from "@/components/Brand";
 
 type Mode = "signup" | "login";
 
@@ -44,73 +45,85 @@ export default function AuthForm({ mode }: { mode: Mode }) {
 
   return (
     <div className="w-full max-w-sm">
-      <h1 className="mb-1 text-2xl font-semibold">
-        {isSignup ? "Create your account" : "Welcome back"}
-      </h1>
-      <p className="mb-6 text-sm text-black/60 dark:text-white/60">
-        {isSignup
-          ? "Your encryption keys are generated in your browser and never leave it."
-          : "Sign in to unlock your private keys on this device."}
-      </p>
+      <div className="mb-8 flex justify-center sm:justify-start">
+        <Brand size="md" />
+      </div>
 
-      <form onSubmit={onSubmit} className="flex flex-col gap-4">
-        <label className="flex flex-col gap-1 text-sm">
-          Username
-          <input
-            value={username}
-            onChange={(e) => setUsername(e.target.value)}
-            autoComplete="username"
-            className="rounded-md border border-black/15 bg-transparent px-3 py-2 outline-none focus:border-black/40 dark:border-white/20 dark:focus:border-white/50"
-            placeholder="your_handle"
-            required
-          />
-        </label>
+      <div className="surface p-6 sm:p-7">
+        <span className="identifier text-xs uppercase tracking-[0.2em] text-accent">
+          {isSignup ? "new identity" : "unlock"}
+        </span>
+        <h1 className="mt-2 text-2xl font-semibold tracking-tight">
+          {isSignup ? "Create your account" : "Welcome back"}
+        </h1>
+        <p className="mt-2 text-sm leading-relaxed text-muted">
+          {isSignup
+            ? "Your encryption keys are generated in your browser and never leave it."
+            : "Sign in to unlock your private keys on this device."}
+        </p>
 
-        <label className="flex flex-col gap-1 text-sm">
-          Passphrase
-          <input
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            autoComplete={isSignup ? "new-password" : "current-password"}
-            className="rounded-md border border-black/15 bg-transparent px-3 py-2 outline-none focus:border-black/40 dark:border-white/20 dark:focus:border-white/50"
-            placeholder="at least 8 characters"
-            required
-          />
-        </label>
+        <form onSubmit={onSubmit} className="mt-6 flex flex-col gap-4">
+          <label className="flex flex-col gap-1.5 text-sm text-muted">
+            Username
+            <input
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              autoComplete="username"
+              autoCapitalize="none"
+              spellCheck={false}
+              inputMode="text"
+              className="field identifier px-3 py-2.5 text-base text-foreground sm:text-sm"
+              placeholder="your_handle"
+              required
+            />
+          </label>
 
-        {error && (
-          <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
-        )}
-        {notice && (
-          <p className="text-sm text-amber-600 dark:text-amber-400">{notice}</p>
-        )}
+          <label className="flex flex-col gap-1.5 text-sm text-muted">
+            Passphrase
+            <input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              autoComplete={isSignup ? "new-password" : "current-password"}
+              className="field px-3 py-2.5 text-base text-foreground sm:text-sm"
+              placeholder="at least 8 characters"
+              required
+            />
+          </label>
 
-        <button
-          type="submit"
-          disabled={busy}
-          className="rounded-md bg-foreground px-4 py-2 font-medium text-background transition-opacity hover:opacity-90 disabled:opacity-50"
-        >
-          {busy
-            ? "Working…"
-            : isSignup
-              ? "Create account"
-              : "Sign in"}
-        </button>
-      </form>
+          {error && (
+            <p className="rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-sm text-danger">
+              {error}
+            </p>
+          )}
+          {notice && (
+            <p className="rounded-lg border border-warn/30 bg-warn/10 px-3 py-2 text-sm text-warn">
+              {notice}
+            </p>
+          )}
 
-      <p className="mt-6 text-sm text-black/60 dark:text-white/60">
+          <button
+            type="submit"
+            disabled={busy}
+            className="btn-accent mt-1 rounded-[0.625rem] px-4 py-3 text-sm font-semibold sm:py-2.5"
+          >
+            {busy ? "Working…" : isSignup ? "Create account" : "Sign in"}
+          </button>
+        </form>
+      </div>
+
+      <p className="mt-5 text-center text-sm text-muted">
         {isSignup ? (
           <>
             Already have an account?{" "}
-            <Link href="/login" className="underline">
+            <Link href="/login" className="text-accent hover:underline">
               Sign in
             </Link>
           </>
         ) : (
           <>
             Need an account?{" "}
-            <Link href="/signup" className="underline">
+            <Link href="/signup" className="text-accent hover:underline">
               Create one
             </Link>
           </>
@@ -118,9 +131,9 @@ export default function AuthForm({ mode }: { mode: Mode }) {
       </p>
 
       {isSignup && (
-        <p className="mt-4 text-xs text-black/50 dark:text-white/50">
-          Heads up: your passphrase encrypts your private key locally. If you lose
-          it, encrypted history can&apos;t be recovered.
+        <p className="mt-4 text-center text-xs leading-relaxed text-faint">
+          Your passphrase encrypts your private key locally. If you lose it,
+          encrypted history can&apos;t be recovered.
         </p>
       )}
     </div>

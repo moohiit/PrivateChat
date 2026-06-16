@@ -95,10 +95,12 @@ remains end-to-end encrypted and unreadable by any server.
 - [x] Session cookie (httpOnly) + short-lived **connect JWT** endpoint for PartyKit.
 - [x] Username uniqueness + lookup endpoint.
 
-### Phase 2 — PartyKit transport & presence
-- [ ] PartyKit server verifies connect JWT on `onConnect`.
-- [ ] Presence lobby room: in-memory `userId → connections`; online/offline broadcast.
-- [ ] Disconnect cleanup; reconnect handling (partysocket auto-reconnect).
+### Phase 2 — PartyKit transport & presence ✅
+- [x] PartyKit server verifies connect JWT on `onBeforeConnect` (lobby party).
+- [x] Presence lobby room: in-memory `userId → connections`; online/offline broadcast + snapshot.
+- [x] Disconnect cleanup; reconnect handling (partysocket auto-reconnect, fresh token per connect).
+- [x] Dev port pinned to 1999 (`partykit dev --port 1999`); verified via `scripts/presence-check.ts`.
+- [x] Distinctive brand theme + mobile-first responsive UI (globals.css design system).
 
 ### Phase 3 — Chat requests (the handshake)
 - [ ] `request:send` / `request:incoming` / `request:accept` / `request:reject` via lobby.
