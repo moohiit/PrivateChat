@@ -2,6 +2,8 @@
 
 import { useState } from "react";
 import { LobbyProvider, useLobby, type ConnStatus } from "@/lib/client/lobby";
+import ChatView from "@/components/ChatView";
+import type { Conversation } from "@/lib/protocol";
 
 export default function Dashboard({ selfUserId }: { selfUserId: string }) {
   return (
@@ -12,7 +14,13 @@ export default function Dashboard({ selfUserId }: { selfUserId: string }) {
 }
 
 function DashboardInner() {
-  const { status, error, clearError } = useLobby();
+  const { status, error, clearError, conversations } = useLobby();
+  const [openId, setOpenId] = useState<string | null>(null);
+
+  const active = conversations.find((c) => c.conversationId === openId) ?? null;
+  if (active) {
+    return <ChatView conversation={active} onBack={() => setOpenId(null)} />;
+  }
 
   return (
     <div className="flex w-full flex-col gap-4">
@@ -36,9 +44,9 @@ function DashboardInner() {
       <NewChatCard />
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <RequestsCard />
-        <OnlineCard />
+        <OnlineCard onOpen={(c) => setOpenId(c.conversationId)} />
       </div>
-      <ConversationsCard />
+      <ConversationsCard onOpen={(c) => setOpenId(c.conversationId)} />
     </div>
   );
 }
@@ -184,11 +192,11 @@ function RequestsCard() {
   );
 }
 
-function OnlineCard() {
+function OnlineCard({ onOpen }: { onOpen: (c: Conversation) => void }) {
   const { online, selfUserId, sentTo, sendRequest, conversations } = useLobby();
   const others = online.filter((u) => u.userId !== selfUserId);
-  const hasConvo = (id: string) =>
-    conversations.some((c) => c.peer.userId === id);
+  const convoFor = (id: string) =>
+    conversations.find((c) => c.peer.userId === id) ?? null;
 
   return (
     <Card title="Online now" count={others.length}>
@@ -196,36 +204,46 @@ function OnlineCard() {
         <Empty>No one else is online. Open the app elsewhere to test.</Empty>
       ) : (
         <ul className="flex flex-col gap-2">
-          {others.map((u) => (
-            <li
-              key={u.userId}
-              className="flex items-center justify-between gap-2 rounded-lg bg-surface-strong px-3 py-2.5"
-            >
-              <span className="flex min-w-0 items-center gap-2.5">
-                <span className="dot dot-live h-2 w-2 shrink-0 rounded-full bg-accent" />
-                <span className="identifier truncate text-sm">@{u.username}</span>
-              </span>
-              {hasConvo(u.userId) ? (
-                <span className="text-xs text-accent">connected</span>
-              ) : sentTo.includes(u.userId) ? (
-                <span className="text-xs text-faint">requested</span>
-              ) : (
-                <button
-                  onClick={() => sendRequest(u.userId)}
-                  className="btn-ghost rounded-md px-3 py-1.5 text-xs"
-                >
-                  Request
-                </button>
-              )}
-            </li>
-          ))}
+          {others.map((u) => {
+            const convo = convoFor(u.userId);
+            return (
+              <li
+                key={u.userId}
+                className="flex items-center justify-between gap-2 rounded-lg bg-surface-strong px-3 py-2.5"
+              >
+                <span className="flex min-w-0 items-center gap-2.5">
+                  <span className="dot dot-live h-2 w-2 shrink-0 rounded-full bg-accent" />
+                  <span className="identifier truncate text-sm">
+                    @{u.username}
+                  </span>
+                </span>
+                {convo ? (
+                  <button
+                    onClick={() => onOpen(convo)}
+                    className="btn-accent rounded-md px-3 py-1.5 text-xs font-semibold"
+                  >
+                    Open
+                  </button>
+                ) : sentTo.includes(u.userId) ? (
+                  <span className="text-xs text-faint">requested</span>
+                ) : (
+                  <button
+                    onClick={() => sendRequest(u.userId)}
+                    className="btn-ghost rounded-md px-3 py-1.5 text-xs"
+                  >
+                    Request
+                  </button>
+                )}
+              </li>
+            );
+          })}
         </ul>
       )}
     </Card>
   );
 }
 
-function ConversationsCard() {
+function ConversationsCard({ onOpen }: { onOpen: (c: Conversation) => void }) {
   const { conversations, convoCrypto } = useLobby();
   return (
     <Card title="Conversations" count={conversations.length}>
@@ -240,14 +258,10 @@ function ConversationsCard() {
               key={c.conversationId}
               username={c.peer.username}
               crypto={convoCrypto[c.conversationId]}
+              onOpen={() => onOpen(c)}
             />
           ))}
         </ul>
-      )}
-      {conversations.length > 0 && (
-        <p className="mt-3 text-xs text-faint">
-          Secure messaging in these conversations arrives in the next phase.
-        </p>
       )}
     </Card>
   );
@@ -263,9 +277,11 @@ const CRYPTO_LABEL: Record<string, { text: string; color: string }> = {
 function ConversationRow({
   username,
   crypto,
+  onOpen,
 }: {
   username: string;
   crypto?: { status: string; safetyNumber?: string };
+  onOpen: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const status = crypto?.status ?? "deriving";
@@ -290,6 +306,12 @@ function ConversationRow({
               {open ? "Hide" : "Verify"}
             </button>
           )}
+          <button
+            onClick={onOpen}
+            className="btn-accent rounded-md px-3 py-1 text-xs font-semibold"
+          >
+            Open
+          </button>
         </span>
       </div>
 

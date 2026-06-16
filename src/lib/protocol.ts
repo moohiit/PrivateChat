@@ -34,3 +34,33 @@ export type LobbyServerMessage =
   | { type: "request:accepted"; with: PresenceUser; conversationId: string }
   | { type: "request:rejected"; byUserId: string }
   | { type: "error"; message: string };
+
+/* --------------------------- Conversation ------------------------------ */
+
+export type ReceiptState = "delivered" | "read";
+
+/** Conversation room: messages the browser sends. Bodies are ciphertext only. */
+export type ChatClientMessage =
+  | {
+      type: "message:send";
+      id: string;
+      ciphertext: string;
+      iv: string;
+      sentAt: number;
+    }
+  | { type: "receipt"; id: string; state: ReceiptState }
+  | { type: "typing"; on: boolean };
+
+/** Conversation room: messages the server pushes. */
+export type ChatServerMessage =
+  | {
+      type: "message:relay";
+      id: string;
+      from: string;
+      ciphertext: string;
+      iv: string;
+      sentAt: number;
+    }
+  | { type: "receipt"; id: string; state: ReceiptState }
+  | { type: "peer:typing"; on: boolean }
+  | { type: "peer:presence"; online: boolean };

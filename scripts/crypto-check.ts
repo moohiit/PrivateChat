@@ -14,6 +14,24 @@ import {
   encryptMessage,
   decryptMessage,
 } from "../src/lib/crypto/conversation";
+import { conversationId as nodeConversationId } from "../src/lib/conversation-id";
+
+/** Web Crypto re-implementation of the lobby's conversation-id derivation. */
+async function webConversationId(secret: string, a: string, b: string) {
+  const pair = [a, b].sort().join(":");
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const sig = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(pair));
+  return [...new Uint8Array(sig)]
+    .map((x) => x.toString(16).padStart(2, "0"))
+    .join("")
+    .slice(0, 32);
+}
 
 async function main() {
   let pass = 0;
@@ -89,6 +107,12 @@ async function main() {
     wrongConvFailed = true;
   }
   check("different conversationId yields a different key", wrongConvFailed);
+
+  // 6) node (api route) and web-crypto (lobby) conversation ids must match.
+  const hmacSecret = "test-secret-xyz";
+  const nodeId = nodeConversationId(hmacSecret, "u-bob", "u-alice");
+  const webId = await webConversationId(hmacSecret, "u-alice", "u-bob");
+  check("node and web-crypto conversation ids match", nodeId === webId);
 
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);

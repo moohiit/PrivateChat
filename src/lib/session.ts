@@ -60,3 +60,21 @@ export async function destroySession(): Promise<void> {
 export async function mintConnectToken(user: SessionUser): Promise<string> {
   return sign(user, "5m");
 }
+
+/**
+ * Short-lived conversation "ticket": proves the holder is a member of a
+ * specific conversation. The caller must have verified membership (by
+ * recomputing the conversation id) before minting.
+ */
+export async function mintConversationTicket(
+  user: SessionUser,
+  conversationId: string,
+  peerId: string,
+): Promise<string> {
+  return new SignJWT({ username: user.username, cid: conversationId, peer: peerId })
+    .setProtectedHeader({ alg: "HS256" })
+    .setSubject(user.userId)
+    .setIssuedAt()
+    .setExpirationTime("10m")
+    .sign(secret());
+}

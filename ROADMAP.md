@@ -116,10 +116,14 @@ remains end-to-end encrypted and unreadable by any server.
 - [x] Verify-fingerprint UI: 60-digit safety number (order-independent) shown per conversation.
 - [x] Verified via `scripts/crypto-check.ts` (shared key, round-trip, eavesdropper + cross-convo fail).
 
-### Phase 5 — Messaging
-- [ ] Conversation room: `message:send` (ciphertext+iv) → relay to the other member.
-- [ ] Client encrypt/decrypt pipeline; render decrypted messages.
-- [ ] Delivery/read receipts (metadata-light); optimistic UI + ordering.
+### Phase 5 — Messaging ✅
+- [x] Conversation room (`main` party): membership-authorized via signed ticket (`cid` == room id).
+- [x] `message:send` (ciphertext+iv) → relay to the other member; server sees ciphertext only.
+- [x] Client encrypt/decrypt pipeline (useChat) + ChatView UI; render decrypted messages.
+- [x] Delivery/read receipts, typing indicator, peer room-presence; optimistic UI + ordering.
+- [x] `/api/conversation-token` mints per-conversation ticket (membership recomputed server-side).
+- [x] Verified via `scripts/messaging-check.ts` (relay, decrypt, ciphertext-only, receipts, presence).
+- Note: relay-only this phase — offline/history persistence is Phase 6.
 
 ### Phase 6 — Persistence toggle
 - [ ] Per-conversation persist flag (negotiated; both must agree).
