@@ -21,7 +21,8 @@ export type Conversation = {
 export type LobbyClientMessage =
   | { type: "request:send"; toUserId: string }
   | { type: "request:accept"; fromUserId: string }
-  | { type: "request:reject"; fromUserId: string };
+  | { type: "request:reject"; fromUserId: string }
+  | { type: "visibility:set"; on: boolean };
 
 /** Lobby: messages the server pushes to the browser. */
 export type LobbyServerMessage =
@@ -34,6 +35,7 @@ export type LobbyServerMessage =
   | { type: "request:sent"; toUserId: string }
   | { type: "request:accepted"; with: PresenceUser; conversationId: string }
   | { type: "request:rejected"; byUserId: string }
+  | { type: "visibility:state"; on: boolean }
   | { type: "error"; message: string };
 
 /* --------------------------- Conversation ------------------------------ */

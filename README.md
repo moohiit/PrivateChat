@@ -71,6 +71,9 @@ identifiers, glass cards, subtle grid + glow. Mobile-first and fully responsive.
   the passphrase).
 - Phase 7: server-authoritative conversation list (symmetric for both parties,
   survives reload/new device), peer presence dots, accessibility + responsive polish.
+- Privacy: opt-in public discoverability (default off — hidden from the "Online now"
+  browse list); still reachable by username search; contact-aware presence so people
+  you already chat with see each other online even when hidden.
 
 Verify scripts:
 - Realtime (needs `npm run party:dev`): `npx tsx scripts/presence-check.ts`,

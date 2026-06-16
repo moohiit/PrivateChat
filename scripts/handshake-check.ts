@@ -88,6 +88,16 @@ async function main() {
     !!aAcc && !!bAcc && aAcc.conversationId === bAcc.conversationId,
   );
 
+  // Contacts see each other online even though both are hidden (default).
+  check(
+    "contacts see each other online after accept (both hidden)",
+    aMsgs.some(
+      (m) =>
+        m.type === "presence:online" &&
+        (m.user as { userId?: string })?.userId === B,
+    ),
+  );
+
   // Server-authoritative: a fresh connection (e.g. after reload) gets the
   // conversation in its snapshot — for BOTH the accepter and the requester.
   const aReconnect: Msg[] = [];
@@ -99,6 +109,13 @@ async function main() {
   check(
     "requester gets the conversation in conversations:snapshot on reconnect",
     !!snap && snap.conversations.some((c) => c.peer.userId === B),
+  );
+  const presSnap = aReconnect.find((m) => m.type === "presence:snapshot") as
+    | { users: { userId: string }[] }
+    | undefined;
+  check(
+    "hidden contact appears in presence snapshot on reconnect",
+    !!presSnap && presSnap.users.some((u) => u.userId === B),
   );
 
   // offline delivery of a pending request.

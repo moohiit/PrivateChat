@@ -47,6 +47,7 @@ function DashboardInner() {
         </button>
       )}
 
+      <VisibilityCard />
       <NewChatCard />
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <RequestsCard />
@@ -100,6 +101,39 @@ function Card({
         )}
       </header>
       {children}
+    </section>
+  );
+}
+
+function VisibilityCard() {
+  const { visible, setVisibility } = useLobby();
+  return (
+    <section className="surface flex items-center justify-between gap-4 p-4 sm:p-5">
+      <div className="min-w-0">
+        <h2 className="text-sm font-medium tracking-tight">
+          Discoverable in “Online now”
+        </h2>
+        <p className="mt-0.5 text-xs text-faint">
+          {visible
+            ? "You appear in others' online list — anyone can send you a request."
+            : "You're hidden. Only people who know your exact username can reach you."}
+        </p>
+      </div>
+      <button
+        role="switch"
+        aria-checked={visible}
+        aria-label="Toggle public discoverability"
+        onClick={() => setVisibility(!visible)}
+        className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors ${
+          visible ? "bg-accent" : "bg-surface-strong"
+        }`}
+      >
+        <span
+          className={`inline-block h-5 w-5 transform rounded-full bg-bg transition-transform ${
+            visible ? "translate-x-5" : "translate-x-0.5"
+          }`}
+        />
+      </button>
     </section>
   );
 }
@@ -208,7 +242,10 @@ function OnlineCard({ onOpen }: { onOpen: (c: Conversation) => void }) {
   return (
     <Card title="Online now" count={others.length}>
       {others.length === 0 ? (
-        <Empty>No one else is online. Open the app elsewhere to test.</Empty>
+        <Empty>
+          No discoverable users online. Only people who turned on visibility
+          appear here — or start a chat by username above.
+        </Empty>
       ) : (
         <ul className="flex flex-col gap-2">
           {others.map((u) => {
@@ -310,11 +347,13 @@ function ConversationRow({
           <ShieldGlyph color={badge.color} />
           <span className="identifier truncate text-sm">@{username}</span>
           {online && (
-            <span
-              className="dot dot-live h-1.5 w-1.5 shrink-0 rounded-full bg-accent"
-              title="online"
-              aria-label="online"
-            />
+            <span className="flex shrink-0 items-center gap-1">
+              <span
+                className="dot dot-live h-2 w-2 rounded-full bg-accent"
+                aria-hidden
+              />
+              <span className="text-[0.65rem] text-accent">online</span>
+            </span>
           )}
         </span>
         <span className="flex shrink-0 items-center gap-2">

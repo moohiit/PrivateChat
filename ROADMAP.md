@@ -146,7 +146,18 @@ remains end-to-end encrypted and unreadable by any server.
 - [x] Accessibility: focus-visible rings, reduced-motion, ARIA roles/labels, live region.
 - [x] Responsive throughout (mobile-first).
 - [ ] Unread badges — deferred: needs always-on per-conversation subscriptions.
-- [x] Verified: all 6 scripts pass (38 checks), incl. conversations:snapshot on reconnect.
+- [x] Verified: all scripts pass, incl. conversations:snapshot on reconnect.
+
+### Privacy: discoverability + contact-aware presence ✅
+- [x] Opt-in **public visibility** (default OFF). Only visible users appear in others'
+      "Online now" list, so strangers can't browse you to send requests.
+- [x] Reachable by **username search** regardless of visibility (must know the handle).
+- [x] **Contact-aware presence:** people you already have a conversation with see each
+      other's online status even when hidden (lobby tailors presence per recipient:
+      visible-to-public OR is-a-contact). Visibility pref persisted in DO storage.
+- [x] Conversation list shows an online indicator (dot + "online") for contacts.
+- [x] Verified: presence-check (visibility transitions), handshake-check (contacts see
+      each other online while both hidden; hidden contact in reconnect snapshot).
 
 ### Phase 8 — Hardening & deploy
 - [ ] Rate-limit auth + requests; validate all input (Zod).

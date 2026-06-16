@@ -39,6 +39,7 @@ type LobbyState = {
   incoming: PresenceUser[];
   sentTo: string[];
   conversations: Conversation[];
+  visible: boolean;
   error: string | null;
 };
 
@@ -51,6 +52,7 @@ type LobbyContextValue = LobbyState & {
   ) => Promise<{ ok: boolean; error?: string }>;
   accept: (fromUserId: string) => void;
   reject: (fromUserId: string) => void;
+  setVisibility: (on: boolean) => void;
   clearError: () => void;
 };
 
@@ -62,6 +64,7 @@ const INITIAL: LobbyState = {
   incoming: [],
   sentTo: [],
   conversations: [],
+  visible: false,
   error: null,
 };
 
@@ -120,6 +123,8 @@ function reduce(state: LobbyState, msg: LobbyServerMessage): LobbyState {
         sentTo: state.sentTo.filter((id) => id !== msg.byUserId),
         error: "Your chat request was declined.",
       };
+    case "visibility:state":
+      return { ...state, visible: msg.on };
     case "error":
       return { ...state, error: msg.message };
     default:
@@ -304,6 +309,14 @@ export function LobbyProvider({
     (fromUserId: string) => send({ type: "request:reject", fromUserId }),
     [send],
   );
+  const setVisibility = useCallback(
+    (on: boolean) => {
+      // Optimistic; server confirms via visibility:state.
+      setState((s) => ({ ...s, visible: on }));
+      send({ type: "visibility:set", on });
+    },
+    [send],
+  );
   const clearError = useCallback(
     () => setState((s) => ({ ...s, error: null })),
     [],
@@ -319,6 +332,7 @@ export function LobbyProvider({
         requestByUsername,
         accept,
         reject,
+        setVisibility,
         clearError,
       }}
     >

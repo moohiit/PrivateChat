@@ -1,7 +1,6 @@
 /**
- * Phase 2 verification: drive the PartyKit lobby with real authenticated
- * WebSocket connections and assert presence behavior. Requires `partykit dev`
- * running on NEXT_PUBLIC_PARTYKIT_HOST (default 127.0.0.1:1999).
+ * Presence + visibility verification. A user only appears in others' presence
+ * when they opt into public visibility. Requires `partykit dev` on the host.
  * Run: npx tsx scripts/presence-check.ts
  */
 import "dotenv/config";
@@ -10,8 +9,14 @@ import { SignJWT } from "jose";
 const HOST = process.env.NEXT_PUBLIC_PARTYKIT_HOST ?? "127.0.0.1:1999";
 const SECRET = process.env.JWT_SECRET;
 if (!SECRET) throw new Error("JWT_SECRET missing");
-
 const key = new TextEncoder().encode(SECRET);
+
+// Unique ids per run so persisted visibility prefs start clean.
+const RUN = String(Date.now());
+const A = `u-alice-${RUN}`;
+const B = `u-bob-${RUN}`;
+
+type Msg = { type: string; [k: string]: unknown };
 
 async function mintToken(userId: string, username: string): Promise<string> {
   return new SignJWT({ username })
@@ -25,8 +30,6 @@ async function mintToken(userId: string, username: string): Promise<string> {
 function url(token: string): string {
   return `ws://${HOST}/parties/lobby/main?token=${encodeURIComponent(token)}`;
 }
-
-type Msg = { type: string; [k: string]: unknown };
 
 function connect(token: string, onMsg: (m: Msg) => void): Promise<WebSocket> {
   return new Promise((resolve, reject) => {
@@ -44,6 +47,7 @@ function connect(token: string, onMsg: (m: Msg) => void): Promise<WebSocket> {
 }
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const send = (ws: WebSocket, m: object) => ws.send(JSON.stringify(m));
 
 async function main() {
   let pass = 0;
@@ -54,7 +58,7 @@ async function main() {
     else fail++;
   };
 
-  // 1) Bad token is rejected.
+  // Bad token is rejected.
   let badRejected = false;
   await new Promise<void>((resolve) => {
     const ws = new WebSocket(url("not-a-real-token"));
@@ -74,36 +78,53 @@ async function main() {
   });
   check("bad token is rejected", badRejected);
 
-  // 2) Alice connects, gets a snapshot.
+  // Alice connects, gets a snapshot + her own visibility (default hidden).
   const aliceMsgs: Msg[] = [];
-  const aliceToken = await mintToken("u-alice", "alice");
-  const alice = await connect(aliceToken, (m) => aliceMsgs.push(m));
+  const alice = await connect(await mintToken(A, "alice"), (m) => aliceMsgs.push(m));
   await wait(400);
   check(
     "alice receives presence:snapshot",
     aliceMsgs.some((m) => m.type === "presence:snapshot"),
   );
+  check(
+    "alice's default visibility is hidden",
+    aliceMsgs.some((m) => m.type === "visibility:state" && m.on === false),
+  );
 
-  // 3) Bob connects -> alice is told bob is online.
-  const bobToken = await mintToken("u-bob", "bob");
-  const bob = await connect(bobToken, () => {});
+  // Bob connects HIDDEN -> alice must NOT see him.
+  const bob = await connect(await mintToken(B, "bob"), () => {});
   await wait(500);
-  const sawBobOnline = aliceMsgs.some(
-    (m) =>
-      m.type === "presence:online" &&
-      (m.user as { userId?: string })?.userId === "u-bob",
+  check(
+    "hidden bob does NOT appear to alice",
+    !aliceMsgs.some(
+      (m) =>
+        m.type === "presence:online" &&
+        (m.user as { userId?: string })?.userId === B,
+    ),
   );
-  check("alice notified presence:online for bob", sawBobOnline);
 
-  // 4) Bob disconnects -> alice is told bob is offline.
-  bob.close();
-  await wait(600);
-  const sawBobOffline = aliceMsgs.some(
-    (m) => m.type === "presence:offline" && m.userId === "u-bob",
+  // Bob opts into visibility -> alice now sees him online.
+  send(bob, { type: "visibility:set", on: true });
+  await wait(500);
+  check(
+    "bob appears online to alice after opting in",
+    aliceMsgs.some(
+      (m) =>
+        m.type === "presence:online" &&
+        (m.user as { userId?: string })?.userId === B,
+    ),
   );
-  check("alice notified presence:offline for bob", sawBobOffline);
+
+  // Bob turns visibility off -> alice sees him go offline.
+  send(bob, { type: "visibility:set", on: false });
+  await wait(500);
+  check(
+    "bob disappears (offline) when he turns visibility off",
+    aliceMsgs.some((m) => m.type === "presence:offline" && m.userId === B),
+  );
 
   alice.close();
+  bob.close();
   await wait(200);
 
   console.log(`\n${pass} passed, ${fail} failed`);

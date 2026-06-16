@@ -18,7 +18,7 @@ import type {
 
 type ConnState = { userId: string; username: string };
 
-type OnlineEntry = { username: string; conns: Set<string> };
+type OnlineEntry = { username: string; conns: Set<string>; visible: boolean };
 
 type Contact = {
   conversationId: string;
@@ -82,12 +82,29 @@ export default class LobbyServer implements Party.Server {
     conn.setState({ userId, username });
 
     const wasOffline = !this.online.has(userId);
-    const entry = this.online.get(userId) ?? { username, conns: new Set<string>() };
+    // Visibility is an opt-in, persisted preference (default: private/hidden).
+    const visible =
+      this.online.get(userId)?.visible ??
+      ((await this.room.storage.get<boolean>(`visible:${userId}`)) ?? false);
+    const entry = this.online.get(userId) ?? {
+      username,
+      conns: new Set<string>(),
+      visible,
+    };
     entry.conns.add(conn.id);
     this.online.set(userId, entry);
 
-    // Presence snapshot to the newcomer.
-    this.send(conn, { type: "presence:snapshot", users: this.snapshot() });
+    const contacts = await this.loadContacts(userId);
+    const contactIds = new Set(contacts.map((c) => c.peerUserId));
+
+    // Presence snapshot: users who are publicly visible OR already a contact.
+    this.send(conn, {
+      type: "presence:snapshot",
+      users: this.visibleTo(userId, contactIds),
+    });
+
+    // The user's own visibility state.
+    this.send(conn, { type: "visibility:state", on: entry.visible });
 
     // Pending incoming requests (survive reloads).
     this.send(conn, {
@@ -96,7 +113,6 @@ export default class LobbyServer implements Party.Server {
     });
 
     // Established conversations (server-authoritative; symmetric for both sides).
-    const contacts = await this.loadContacts(userId);
     this.send(conn, {
       type: "conversations:snapshot",
       conversations: contacts.map((c) => ({
@@ -112,8 +128,10 @@ export default class LobbyServer implements Party.Server {
       this.outbox.delete(userId);
     }
 
+    // Announce online to everyone who may see this user: the public (if visible)
+    // plus this user's contacts (always — contacts see each other regardless).
     if (wasOffline) {
-      this.broadcastExcept(conn.id, {
+      this.announcePresenceToWatchers(userId, contactIds, entry.visible, {
         type: "presence:online",
         user: { userId, username },
       });
@@ -121,11 +139,11 @@ export default class LobbyServer implements Party.Server {
   }
 
   async onClose(conn: Party.Connection<ConnState>) {
-    this.handleLeave(conn);
+    await this.handleLeave(conn);
   }
 
   async onError(conn: Party.Connection<ConnState>) {
-    this.handleLeave(conn);
+    await this.handleLeave(conn);
   }
 
   async onMessage(raw: string, sender: Party.Connection<ConnState>) {
@@ -146,7 +164,43 @@ export default class LobbyServer implements Party.Server {
         return this.handleAccept(me, msg.fromUserId);
       case "request:reject":
         return this.handleReject(me, msg.fromUserId);
+      case "visibility:set":
+        return this.handleVisibility(me, msg.on);
     }
+  }
+
+  /**
+   * Set the user's public discoverability. When visible, they appear in others'
+   * "Online now" list; when hidden, they don't (but remain reachable by anyone
+   * who knows their username via search). Preference is persisted.
+   */
+  private async handleVisibility(me: ConnState, on: boolean) {
+    const entry = this.online.get(me.userId);
+    await this.room.storage.put(`visible:${me.userId}`, on);
+    if (!entry) return;
+
+    const was = entry.visible;
+    entry.visible = on;
+
+    if (on !== was) {
+      // Only NON-contacts are affected by the public toggle — contacts always
+      // see each other online regardless of visibility.
+      const contactIds = new Set(
+        (await this.loadContacts(me.userId)).map((c) => c.peerUserId),
+      );
+      const msg: LobbyServerMessage = on
+        ? {
+            type: "presence:online",
+            user: { userId: me.userId, username: me.username },
+          }
+        : { type: "presence:offline", userId: me.userId };
+      for (const [otherId] of this.online) {
+        if (otherId !== me.userId && !contactIds.has(otherId)) {
+          this.sendToUser(otherId, msg);
+        }
+      }
+    }
+    this.sendToUser(me.userId, { type: "visibility:state", on });
   }
 
   /* --------------------------- request handlers -------------------------- */
@@ -211,6 +265,12 @@ export default class LobbyServer implements Party.Server {
       with: meUser,
       conversationId,
     });
+
+    // They're now contacts: surface each other's online status immediately.
+    this.sendToUser(fromUserId, { type: "presence:online", user: meUser });
+    if (this.online.has(fromUserId)) {
+      this.sendToUser(me.userId, { type: "presence:online", user: requester });
+    }
   }
 
   private handleReject(me: ConnState, fromUserId: string) {
@@ -221,23 +281,45 @@ export default class LobbyServer implements Party.Server {
 
   /* ------------------------------ presence ------------------------------- */
 
-  private handleLeave(conn: Party.Connection<ConnState>) {
+  private async handleLeave(conn: Party.Connection<ConnState>) {
     const userId = conn.state?.userId;
     if (!userId) return;
     const entry = this.online.get(userId);
     if (!entry) return;
     entry.conns.delete(conn.id);
     if (entry.conns.size === 0) {
+      const wasVisible = entry.visible;
       this.online.delete(userId);
-      this.broadcast({ type: "presence:offline", userId });
+      // Announce offline to everyone who could see them: public (if visible)
+      // plus their contacts.
+      const contactIds = new Set(
+        (await this.loadContacts(userId)).map((c) => c.peerUserId),
+      );
+      this.announcePresenceToWatchers(userId, contactIds, wasVisible, {
+        type: "presence:offline",
+        userId,
+      });
     }
   }
 
-  private snapshot(): PresenceUser[] {
-    return [...this.online.entries()].map(([userId, e]) => ({
-      userId,
-      username: e.username,
-    }));
+  /** Online users visible to `userId`: publicly visible OR already a contact. */
+  private visibleTo(userId: string, contactIds: Set<string>): PresenceUser[] {
+    return [...this.online.entries()]
+      .filter(([id, e]) => id !== userId && (e.visible || contactIds.has(id)))
+      .map(([id, e]) => ({ userId: id, username: e.username }));
+  }
+
+  /** Send a presence message to everyone who may see `userId`. */
+  private announcePresenceToWatchers(
+    userId: string,
+    contactIds: Set<string>,
+    visible: boolean,
+    msg: LobbyServerMessage,
+  ) {
+    for (const [otherId] of this.online) {
+      if (otherId === userId) continue;
+      if (visible || contactIds.has(otherId)) this.sendToUser(otherId, msg);
+    }
   }
 
   /* ------------------------------- helpers ------------------------------- */
@@ -270,14 +352,6 @@ export default class LobbyServer implements Party.Server {
       q.push(msg);
       this.outbox.set(userId, q);
     }
-  }
-
-  private broadcast(msg: LobbyServerMessage) {
-    this.room.broadcast(JSON.stringify(msg));
-  }
-
-  private broadcastExcept(connId: string, msg: LobbyServerMessage) {
-    this.room.broadcast(JSON.stringify(msg), [connId]);
   }
 }
 
