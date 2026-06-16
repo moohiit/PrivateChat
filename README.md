@@ -46,5 +46,9 @@ npm run dev         # Next.js app on http://localhost:3000
 - **Turso:** `turso db create privatechat`, then wire the URL/token into Vercel.
 
 ## Status
-**Phase 0 complete** — scaffold, deps, PartyKit skeleton, Turso client + migration, env.
-Next: **Phase 1 — Identity & auth** (see ROADMAP.md).
+**Phase 0 + Phase 1 complete.**
+- Phase 0: scaffold, deps, PartyKit skeleton, Turso client + migration, env.
+- Phase 1: signup/login/logout/me + username lookup + PartyKit connect-token APIs;
+  client-side ECDH keygen, passphrase-wrapped private key in IndexedDB; signup/login UI.
+
+Next: **Phase 2 — PartyKit transport & presence** (see ROADMAP.md).

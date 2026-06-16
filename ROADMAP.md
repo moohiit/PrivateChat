@@ -82,18 +82,18 @@ remains end-to-end encrypted and unreadable by any server.
 
 ## 3. Phased Plan
 
-### Phase 0 — Scaffold
-- [ ] `create-next-app` (TypeScript, App Router, Tailwind), deploy skeleton to Vercel.
-- [ ] Init PartyKit project (`partykit`/`partyserver`); local dev wiring.
-- [ ] Add deps: `partysocket`, `@libsql/client` (Turso), `argon2`/`bcryptjs`, `jose` (JWT), `zod`.
-- [ ] Provision Turso DB; migration for `users` table.
+### Phase 0 — Scaffold ✅
+- [x] `create-next-app` (TypeScript, App Router, Tailwind), deploy skeleton to Vercel.
+- [x] Init PartyKit project (`partykit`/`partyserver`); local dev wiring.
+- [x] Add deps: `partysocket`, `@libsql/client` (Turso), `@node-rs/argon2`, `jose` (JWT), `zod`.
+- [x] Provision Turso DB; migration for `users` table. (local file DB in dev; remote Turso for prod)
 
-### Phase 1 — Identity & auth
-- [ ] Signup/login API routes (Zod-validated). Hash passphrase with Argon2.
-- [ ] Client-side keypair generation on signup; upload public key to Turso.
-- [ ] Wrap & store private key in IndexedDB; unlock on login with passphrase.
-- [ ] Session cookie (httpOnly) + short-lived **connect JWT** endpoint for PartyKit.
-- [ ] Username uniqueness + lookup endpoint.
+### Phase 1 — Identity & auth ✅
+- [x] Signup/login API routes (Zod-validated). Hash passphrase with Argon2.
+- [x] Client-side keypair generation on signup; upload public key to Turso.
+- [x] Wrap & store private key in IndexedDB; unlock on login with passphrase.
+- [x] Session cookie (httpOnly) + short-lived **connect JWT** endpoint for PartyKit.
+- [x] Username uniqueness + lookup endpoint.
 
 ### Phase 2 — PartyKit transport & presence
 - [ ] PartyKit server verifies connect JWT on `onConnect`.
