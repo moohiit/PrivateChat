@@ -17,10 +17,20 @@ export const passwordSchema = z
 /** Base64 ECDH P-256 public key (SPKI). Bounded to reject junk. */
 export const publicKeySchema = z.string().min(40).max(2000);
 
+const b64 = z.string().min(1).max(4000);
+
+/** Passphrase-wrapped private key blob for zero-knowledge server backup. */
+export const wrappedKeySchema = z.object({
+  wrapped: b64,
+  salt: b64,
+  iv: b64,
+});
+
 export const signupSchema = z.object({
   username: usernameSchema,
   password: passwordSchema,
   publicKey: publicKeySchema,
+  wrappedKey: wrappedKeySchema,
 });
 
 export const loginSchema = z.object({

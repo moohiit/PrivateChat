@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { signupSchema } from "@/lib/validation";
-import { createUser, getUserByUsername } from "@/lib/users";
+import { createUser, createKeyBackup, getUserByUsername } from "@/lib/users";
 import { hashPassword } from "@/lib/auth-hash";
 import { createSession } from "@/lib/session";
 import { newId } from "@/lib/ids";
@@ -15,7 +15,7 @@ export async function POST(req: Request) {
     );
   }
 
-  const { username, password, publicKey } = parsed.data;
+  const { username, password, publicKey, wrappedKey } = parsed.data;
 
   if (await getUserByUsername(username)) {
     return NextResponse.json({ error: "username taken" }, { status: 409 });
@@ -30,6 +30,9 @@ export async function POST(req: Request) {
     // Unique-index race: someone took the name between the check and insert.
     return NextResponse.json({ error: "username taken" }, { status: 409 });
   }
+
+  // Store the zero-knowledge encrypted key backup (ciphertext only).
+  await createKeyBackup(id, wrappedKey);
 
   await createSession({ userId: id, username });
   return NextResponse.json({ userId: id, username });

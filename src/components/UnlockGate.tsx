@@ -29,13 +29,13 @@ export default function UnlockGate({
 
   useEffect(() => {
     let active = true;
-    ensureUnlockedKey(userId).then((s) => {
+    ensureUnlockedKey(userId, username).then((s) => {
       if (active) setStatus(s);
     });
     return () => {
       active = false;
     };
-  }, [userId]);
+  }, [userId, username]);
 
   async function onUnlock(e: React.FormEvent) {
     e.preventDefault();

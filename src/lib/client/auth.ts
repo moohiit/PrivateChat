@@ -13,6 +13,7 @@ import {
   storeUnwrappedKey,
   loadUnwrappedKey,
   clearUnwrappedKeys,
+  type StoredIdentity,
 } from "@/lib/crypto/idb";
 import {
   setUnlockedKey,
@@ -20,6 +21,7 @@ import {
   getUnlockedKey,
 } from "@/lib/crypto/session-key";
 import { clearConversationKeys } from "@/lib/crypto/keystore";
+import { bytesToBase64, base64ToBytes } from "@/lib/crypto/encoding";
 
 export type AuthResult = {
   userId: string;
@@ -39,10 +41,62 @@ async function errorMessage(res: Response): Promise<string> {
   return (data?.error as string) ?? `request failed (${res.status})`;
 }
 
+type ServerBackup = {
+  wrapped: string;
+  salt: string;
+  iv: string;
+  publicKey: string;
+};
+
+/** Fetch the zero-knowledge encrypted key backup for the session user. */
+async function fetchKeyBackup(): Promise<ServerBackup | null> {
+  const res = await fetch("/api/auth/key-backup");
+  if (!res.ok) return null;
+  const { backup } = (await res.json()) as { backup: ServerBackup | null };
+  return backup;
+}
+
+/** Restore the wrapped key from the server backup into local IndexedDB. */
+async function restoreFromBackup(
+  userId: string,
+  username: string,
+): Promise<StoredIdentity | null> {
+  const backup = await fetchKeyBackup();
+  if (!backup) return null;
+  await saveIdentity({
+    userId,
+    username,
+    publicKeyBase64: backup.publicKey,
+    wrapped: base64ToBytes(backup.wrapped),
+    salt: base64ToBytes(backup.salt),
+    iv: base64ToBytes(backup.iv),
+  });
+  return loadIdentity(userId);
+}
+
 /**
- * Signup: generate the identity keypair in-browser, register the public key,
- * then wrap the private key with the passphrase and store it locally. The
- * private key never touches the network.
+ * Backfill the server backup from a local identity if the server has none yet
+ * (for accounts created before key backup existed). Best-effort; never throws.
+ */
+async function backfillBackup(identity: StoredIdentity): Promise<void> {
+  try {
+    if (await fetchKeyBackup()) return;
+    await postJson("/api/auth/key-backup", {
+      wrapped: bytesToBase64(identity.wrapped),
+      salt: bytesToBase64(identity.salt),
+      iv: bytesToBase64(identity.iv),
+    });
+  } catch {
+    /* best-effort */
+  }
+}
+
+/**
+ * Signup: generate the identity keypair in-browser, wrap the private key with
+ * the passphrase, store it locally AND upload the wrapped (encrypted) blob as a
+ * zero-knowledge backup so other devices can restore it. Only the public key and
+ * ciphertext leave the browser — never the plaintext private key or passphrase
+ * key.
  */
 export async function signup(
   username: string,
@@ -50,17 +104,22 @@ export async function signup(
 ): Promise<AuthResult> {
   const keyPair = await generateIdentityKeyPair();
   const publicKeyBase64 = await exportPublicKeyBase64(keyPair.publicKey);
+  const wrapped = await wrapPrivateKey(keyPair.privateKey, password);
 
   const res = await postJson("/api/auth/signup", {
     username,
     password,
     publicKey: publicKeyBase64,
+    wrappedKey: {
+      wrapped: bytesToBase64(wrapped.wrapped),
+      salt: bytesToBase64(wrapped.salt),
+      iv: bytesToBase64(wrapped.iv),
+    },
   });
   if (!res.ok) throw new Error(await errorMessage(res));
 
   const { userId } = (await res.json()) as AuthResult;
 
-  const wrapped = await wrapPrivateKey(keyPair.privateKey, password);
   await saveIdentity({ userId, username, publicKeyBase64, ...wrapped });
 
   // Use the non-extractable unwrapped key everywhere (cache survives reloads).
@@ -71,9 +130,9 @@ export async function signup(
 }
 
 /**
- * Login: authenticate to the server, then unlock the local private key if this
- * device has it. A device without the stored key (new device) can sign in but
- * cannot decrypt history — by design.
+ * Login: authenticate, then unlock the private key. If this device has no local
+ * key (new device/browser), restore it from the server's encrypted backup and
+ * unwrap with the passphrase — enabling multi-device access.
  */
 export async function login(
   username: string,
@@ -84,7 +143,10 @@ export async function login(
 
   const { userId } = (await res.json()) as AuthResult;
 
-  const identity = await loadIdentity(userId);
+  let identity = await loadIdentity(userId);
+  if (!identity) {
+    identity = await restoreFromBackup(userId, username);
+  }
   if (!identity) {
     return { userId, username, hasLocalKey: false };
   }
@@ -93,18 +155,22 @@ export async function login(
   const privateKey = await unwrapPrivateKey(getWrappedKey(identity), password);
   setUnlockedKey(privateKey);
   await storeUnwrappedKey(userId, privateKey);
+  await backfillBackup(identity);
   return { userId, username, hasLocalKey: true };
 }
 
 export type UnlockStatus = "ready" | "needs-passphrase" | "no-key";
 
 /**
- * Ensure the private key is unlocked for this user without requiring a fresh
- * login. Called on app load: reuses the in-memory key, else the IndexedDB
- * unwrapped-key cache (survives reloads), else reports whether a passphrase
- * unlock is possible (wrapped key present) or the device simply has no key.
+ * Ensure the private key is unlocked for this user without a fresh login.
+ * Order: in-memory key -> IndexedDB unwrapped cache (survives reload) -> local
+ * wrapped key -> server encrypted backup. Returns whether a passphrase unlock is
+ * possible, or there is genuinely no key anywhere.
  */
-export async function ensureUnlockedKey(userId: string): Promise<UnlockStatus> {
+export async function ensureUnlockedKey(
+  userId: string,
+  username: string,
+): Promise<UnlockStatus> {
   if (getUnlockedKey()) return "ready";
 
   const cached = await loadUnwrappedKey(userId);
@@ -113,7 +179,10 @@ export async function ensureUnlockedKey(userId: string): Promise<UnlockStatus> {
     return "ready";
   }
 
-  const identity = await loadIdentity(userId);
+  let identity = await loadIdentity(userId);
+  if (!identity) {
+    identity = await restoreFromBackup(userId, username);
+  }
   return identity ? "needs-passphrase" : "no-key";
 }
 
@@ -128,6 +197,7 @@ export async function unlockIdentity(
     const privateKey = await unwrapPrivateKey(getWrappedKey(identity), password);
     setUnlockedKey(privateKey);
     await storeUnwrappedKey(userId, privateKey);
+    await backfillBackup(identity);
     return { ok: true };
   } catch {
     return { ok: false, error: "Wrong passphrase." };

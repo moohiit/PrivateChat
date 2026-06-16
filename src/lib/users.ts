@@ -51,3 +51,24 @@ export async function createUser(input: {
     args: [input.id, input.username, input.publicKey, input.pwdHash, input.createdAt],
   });
 }
+
+export type KeyBackup = { wrapped: string; salt: string; iv: string };
+
+export async function createKeyBackup(
+  userId: string,
+  backup: KeyBackup,
+): Promise<void> {
+  await db.execute({
+    sql: "INSERT OR REPLACE INTO key_backups (user_id, wrapped, salt, iv) VALUES (?, ?, ?, ?)",
+    args: [userId, backup.wrapped, backup.salt, backup.iv],
+  });
+}
+
+export async function getKeyBackup(userId: string): Promise<KeyBackup | null> {
+  const res = await db.execute({
+    sql: "SELECT wrapped, salt, iv FROM key_backups WHERE user_id = ? LIMIT 1",
+    args: [userId],
+  });
+  const row = res.rows[0] as unknown as KeyBackup | undefined;
+  return row ?? null;
+}
