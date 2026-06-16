@@ -51,12 +51,16 @@ terminal, modern glass" look — deep ink background, phosphor-lime accent, mono
 identifiers, glass cards, subtle grid + glow. Mobile-first and fully responsive.
 
 ## Status
-**Phases 0–2 complete.**
+**Phases 0–3 complete.**
 - Phase 0: scaffold, deps, PartyKit skeleton, Turso client + migration, env.
 - Phase 1: signup/login/logout/me + username lookup + PartyKit connect-token APIs;
   client-side ECDH keygen, passphrase-wrapped private key in IndexedDB; signup/login UI.
 - Phase 2: PartyKit lobby with JWT-authenticated connections + live presence
-  (snapshot / online / offline); responsive branded UI. Dev server on port 1999;
-  verified by `npx tsx scripts/presence-check.ts`.
+  (snapshot / online / offline); responsive branded UI.
+- Phase 3: chat-request handshake (send/accept/reject, offline delivery), stable
+  HMAC conversation id, unified LobbyProvider + Dashboard UI.
 
-Next: **Phase 3 — Chat requests (the handshake)** (see ROADMAP.md).
+Verify the realtime layer (with `npm run party:dev` running):
+`npx tsx scripts/presence-check.ts` and `npx tsx scripts/handshake-check.ts`.
+
+Next: **Phase 4 — E2E key exchange** (see ROADMAP.md).

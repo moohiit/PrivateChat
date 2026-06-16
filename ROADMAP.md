@@ -102,10 +102,12 @@ remains end-to-end encrypted and unreadable by any server.
 - [x] Dev port pinned to 1999 (`partykit dev --port 1999`); verified via `scripts/presence-check.ts`.
 - [x] Distinctive brand theme + mobile-first responsive UI (globals.css design system).
 
-### Phase 3 — Chat requests (the handshake)
-- [ ] `request:send` / `request:incoming` / `request:accept` / `request:reject` via lobby.
-- [ ] Pending requests held in DO memory; delivered when recipient is/comes online.
-- [ ] On accept, derive a stable conversation room id (e.g. sorted user-id pair hash).
+### Phase 3 — Chat requests (the handshake) ✅
+- [x] `request:send` / `request:incoming` / `request:accept` / `request:reject` via lobby.
+- [x] Pending requests held in DO memory; delivered via snapshot/outbox when recipient connects.
+- [x] On accept, derive a stable conversation id = HMAC-SHA256(JWT_SECRET, sorted user-id pair).
+- [x] Unified `LobbyProvider` context + Dashboard UI (new-chat, requests, online, conversations).
+- [x] Verified via `scripts/handshake-check.ts` (send/accept/reject, offline delivery, shared id).
 
 ### Phase 4 — E2E key exchange
 - [ ] Public-key fetch endpoint (Vercel → Turso).

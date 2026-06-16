@@ -2,7 +2,7 @@ import Link from "next/link";
 import { getSession } from "@/lib/session";
 import Brand from "@/components/Brand";
 import LogoutButton from "@/components/LogoutButton";
-import PresencePanel from "@/components/PresencePanel";
+import Dashboard from "@/components/Dashboard";
 
 const FEATURES = [
   { k: "e2e", label: "End-to-end encrypted", note: "ECDH + AES-GCM in your browser" },
@@ -32,17 +32,8 @@ export default async function Home() {
           </div>
         </header>
 
-        <main className="mx-auto flex w-full max-w-3xl flex-1 flex-col items-center gap-6 px-4 py-8 sm:px-6 sm:py-12">
-          <div className="w-full max-w-md text-center sm:text-left">
-            <h1 className="text-2xl font-semibold tracking-tight">
-              You&apos;re in,{" "}
-              <span className="identifier text-accent">@{session.username}</span>
-            </h1>
-            <p className="mt-1 text-sm text-muted">
-              Your keys are unlocked on this device. Live presence is below.
-            </p>
-          </div>
-          <PresencePanel selfUserId={session.userId} />
+        <main className="mx-auto w-full max-w-3xl flex-1 px-4 py-6 sm:px-6 sm:py-10">
+          <Dashboard selfUserId={session.userId} />
         </main>
       </div>
     );

@@ -1,14 +1,19 @@
 import type * as Party from "partykit/server";
 import { verifyConnectToken } from "./auth";
-import type { LobbyServerMessage, PresenceUser } from "../src/lib/protocol";
+import type {
+  LobbyClientMessage,
+  LobbyServerMessage,
+  PresenceUser,
+} from "../src/lib/protocol";
 
 /**
- * Presence lobby (the "lobby" party). A single shared room ("main") that tracks
- * who is online and (Phase 3) routes chat requests. All state is in-memory and
- * ephemeral — nothing is persisted.
+ * Presence lobby (the "lobby" party). A single shared room ("main") that:
+ *  - tracks who is online (in-memory, multi-connection per user),
+ *  - routes chat requests (send / accept / reject),
+ *  - on accept, derives a stable, unguessable conversation id (HMAC of the
+ *    sorted user-id pair under JWT_SECRET) and hands it to both parties.
  *
- * A user is "online" while they hold >= 1 connection (multiple tabs/devices).
- * Transitions (offline->online, online->offline) are broadcast to everyone else.
+ * All state is in-memory and ephemeral — nothing is persisted.
  */
 
 type ConnState = { userId: string; username: string };
@@ -16,7 +21,12 @@ type ConnState = { userId: string; username: string };
 type OnlineEntry = { username: string; conns: Set<string> };
 
 export default class LobbyServer implements Party.Server {
+  /** userId -> online connections */
   private readonly online = new Map<string, OnlineEntry>();
+  /** targetUserId -> (fromUserId -> requester) : pending incoming requests */
+  private readonly pending = new Map<string, Map<string, PresenceUser>>();
+  /** userId -> queued messages to deliver on next connect (offline delivery) */
+  private readonly outbox = new Map<string, LobbyServerMessage[]>();
 
   constructor(readonly room: Party.Room) {}
 
@@ -49,10 +59,22 @@ export default class LobbyServer implements Party.Server {
     entry.conns.add(conn.id);
     this.online.set(userId, entry);
 
-    // Send the full snapshot to the newcomer.
-    this.sendTo(conn, { type: "presence:snapshot", users: this.snapshot() });
+    // Presence snapshot to the newcomer.
+    this.send(conn, { type: "presence:snapshot", users: this.snapshot() });
 
-    // Tell everyone else only on the offline->online transition.
+    // Pending incoming requests (survive reloads).
+    this.send(conn, {
+      type: "requests:snapshot",
+      incoming: [...(this.pending.get(userId)?.values() ?? [])],
+    });
+
+    // Anything queued while offline (accepted/rejected notices).
+    const queued = this.outbox.get(userId);
+    if (queued?.length) {
+      for (const msg of queued) this.send(conn, msg);
+      this.outbox.delete(userId);
+    }
+
     if (wasOffline) {
       this.broadcastExcept(conn.id, {
         type: "presence:online",
@@ -69,9 +91,86 @@ export default class LobbyServer implements Party.Server {
     this.handleLeave(conn);
   }
 
-  async onMessage(_raw: string, _sender: Party.Connection<ConnState>) {
-    // TODO(Phase 3): route chat requests (send / incoming / accept / reject).
+  async onMessage(raw: string, sender: Party.Connection<ConnState>) {
+    const me = sender.state;
+    if (!me?.userId) return;
+
+    let msg: LobbyClientMessage;
+    try {
+      msg = JSON.parse(raw) as LobbyClientMessage;
+    } catch {
+      return;
+    }
+
+    switch (msg.type) {
+      case "request:send":
+        return this.handleSend(me, msg.toUserId);
+      case "request:accept":
+        return this.handleAccept(me, msg.fromUserId);
+      case "request:reject":
+        return this.handleReject(me, msg.fromUserId);
+    }
   }
+
+  /* --------------------------- request handlers -------------------------- */
+
+  private handleSend(me: ConnState, toUserId: string) {
+    if (!toUserId || toUserId === me.userId) {
+      return this.sendToUser(me.userId, {
+        type: "error",
+        message: "Invalid request target.",
+      });
+    }
+    const from: PresenceUser = { userId: me.userId, username: me.username };
+
+    const forTarget = this.pending.get(toUserId) ?? new Map<string, PresenceUser>();
+    forTarget.set(me.userId, from);
+    this.pending.set(toUserId, forTarget);
+
+    // Live delivery if online (also kept in `pending` for reload snapshots).
+    if (this.online.has(toUserId)) {
+      this.sendToUser(toUserId, { type: "request:incoming", from });
+    }
+    this.sendToUser(me.userId, { type: "request:sent", toUserId });
+  }
+
+  private async handleAccept(me: ConnState, fromUserId: string) {
+    const requester = this.pending.get(me.userId)?.get(fromUserId);
+    if (!requester) {
+      return this.sendToUser(me.userId, {
+        type: "error",
+        message: "That request is no longer available.",
+      });
+    }
+    this.removePending(me.userId, fromUserId);
+
+    const conversationId = await deriveConversationId(
+      this.room.env.JWT_SECRET as string,
+      me.userId,
+      fromUserId,
+    );
+    const meUser: PresenceUser = { userId: me.userId, username: me.username };
+
+    // Notify the accepter (online) and the requester (online or queued).
+    this.sendToUser(me.userId, {
+      type: "request:accepted",
+      with: requester,
+      conversationId,
+    });
+    this.deliverOrQueue(fromUserId, {
+      type: "request:accepted",
+      with: meUser,
+      conversationId,
+    });
+  }
+
+  private handleReject(me: ConnState, fromUserId: string) {
+    if (!this.pending.get(me.userId)?.has(fromUserId)) return;
+    this.removePending(me.userId, fromUserId);
+    this.deliverOrQueue(fromUserId, { type: "request:rejected", byUserId: me.userId });
+  }
+
+  /* ------------------------------ presence ------------------------------- */
 
   private handleLeave(conn: Party.Connection<ConnState>) {
     const userId = conn.state?.userId;
@@ -92,8 +191,36 @@ export default class LobbyServer implements Party.Server {
     }));
   }
 
-  private sendTo(conn: Party.Connection<ConnState>, msg: LobbyServerMessage) {
+  /* ------------------------------- helpers ------------------------------- */
+
+  private removePending(targetUserId: string, fromUserId: string) {
+    const map = this.pending.get(targetUserId);
+    map?.delete(fromUserId);
+    if (map && map.size === 0) this.pending.delete(targetUserId);
+  }
+
+  private send(conn: Party.Connection<ConnState>, msg: LobbyServerMessage) {
     conn.send(JSON.stringify(msg));
+  }
+
+  private sendToUser(userId: string, msg: LobbyServerMessage) {
+    const entry = this.online.get(userId);
+    if (!entry) return;
+    const data = JSON.stringify(msg);
+    for (const connId of entry.conns) {
+      this.room.getConnection(connId)?.send(data);
+    }
+  }
+
+  /** Deliver now if online, otherwise queue for the user's next connect. */
+  private deliverOrQueue(userId: string, msg: LobbyServerMessage) {
+    if (this.online.has(userId)) {
+      this.sendToUser(userId, msg);
+    } else {
+      const q = this.outbox.get(userId) ?? [];
+      q.push(msg);
+      this.outbox.set(userId, q);
+    }
   }
 
   private broadcast(msg: LobbyServerMessage) {
@@ -103,4 +230,29 @@ export default class LobbyServer implements Party.Server {
   private broadcastExcept(connId: string, msg: LobbyServerMessage) {
     this.room.broadcast(JSON.stringify(msg), [connId]);
   }
+}
+
+/**
+ * Stable, unguessable conversation id: HMAC-SHA256(secret, sorted(a,b)),
+ * truncated. Deterministic so both parties get the same id; unguessable
+ * without the server secret.
+ */
+async function deriveConversationId(
+  secret: string,
+  a: string,
+  b: string,
+): Promise<string> {
+  const pair = [a, b].sort().join(":");
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const sig = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(pair));
+  return [...new Uint8Array(sig)]
+    .map((x) => x.toString(16).padStart(2, "0"))
+    .join("")
+    .slice(0, 32);
 }
