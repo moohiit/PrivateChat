@@ -29,6 +29,7 @@ export type LobbyServerMessage =
   | { type: "presence:online"; user: PresenceUser }
   | { type: "presence:offline"; userId: string }
   | { type: "requests:snapshot"; incoming: PresenceUser[] }
+  | { type: "conversations:snapshot"; conversations: Conversation[] }
   | { type: "request:incoming"; from: PresenceUser }
   | { type: "request:sent"; toUserId: string }
   | { type: "request:accepted"; with: PresenceUser; conversationId: string }

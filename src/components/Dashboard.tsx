@@ -256,7 +256,8 @@ function OnlineCard({ onOpen }: { onOpen: (c: Conversation) => void }) {
 }
 
 function ConversationsCard({ onOpen }: { onOpen: (c: Conversation) => void }) {
-  const { conversations, convoCrypto } = useLobby();
+  const { conversations, convoCrypto, online } = useLobby();
+  const onlineIds = new Set(online.map((u) => u.userId));
   return (
     <Card title="Conversations" count={conversations.length}>
       {conversations.length === 0 ? (
@@ -270,6 +271,7 @@ function ConversationsCard({ onOpen }: { onOpen: (c: Conversation) => void }) {
               key={c.conversationId}
               username={c.peer.username}
               crypto={convoCrypto[c.conversationId]}
+              online={onlineIds.has(c.peer.userId)}
               onOpen={() => onOpen(c)}
             />
           ))}
@@ -289,10 +291,12 @@ const CRYPTO_LABEL: Record<string, { text: string; color: string }> = {
 function ConversationRow({
   username,
   crypto,
+  online,
   onOpen,
 }: {
   username: string;
   crypto?: { status: string; safetyNumber?: string };
+  online: boolean;
   onOpen: () => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -305,6 +309,13 @@ function ConversationRow({
         <span className="flex min-w-0 items-center gap-2.5">
           <ShieldGlyph color={badge.color} />
           <span className="identifier truncate text-sm">@{username}</span>
+          {online && (
+            <span
+              className="dot dot-live h-1.5 w-1.5 shrink-0 rounded-full bg-accent"
+              title="online"
+              aria-label="online"
+            />
+          )}
         </span>
         <span className="flex shrink-0 items-center gap-2">
           <span className="text-xs" style={{ color: badge.color }}>

@@ -20,6 +20,12 @@ type ConnState = { userId: string; username: string };
 
 type OnlineEntry = { username: string; conns: Set<string> };
 
+type Contact = {
+  conversationId: string;
+  peerUserId: string;
+  peerUsername: string;
+};
+
 export default class LobbyServer implements Party.Server {
   /** userId -> online connections */
   private readonly online = new Map<string, OnlineEntry>();
@@ -27,8 +33,29 @@ export default class LobbyServer implements Party.Server {
   private readonly pending = new Map<string, Map<string, PresenceUser>>();
   /** userId -> queued messages to deliver on next connect (offline delivery) */
   private readonly outbox = new Map<string, LobbyServerMessage[]>();
+  /** userId -> established conversations (durable, server-authoritative) */
+  private readonly contacts = new Map<string, Contact[]>();
+  private readonly contactsLoaded = new Set<string>();
 
   constructor(readonly room: Party.Room) {}
+
+  private async loadContacts(userId: string): Promise<Contact[]> {
+    if (!this.contactsLoaded.has(userId)) {
+      const stored =
+        (await this.room.storage.get<Contact[]>(`contacts:${userId}`)) ?? [];
+      this.contacts.set(userId, stored);
+      this.contactsLoaded.add(userId);
+    }
+    return this.contacts.get(userId) ?? [];
+  }
+
+  private async addContact(userId: string, contact: Contact): Promise<void> {
+    const list = await this.loadContacts(userId);
+    if (list.some((c) => c.conversationId === contact.conversationId)) return;
+    list.push(contact);
+    this.contacts.set(userId, list);
+    await this.room.storage.put(`contacts:${userId}`, list);
+  }
 
   static async onBeforeConnect(request: Party.Request, lobby: Party.Lobby) {
     try {
@@ -66,6 +93,16 @@ export default class LobbyServer implements Party.Server {
     this.send(conn, {
       type: "requests:snapshot",
       incoming: [...(this.pending.get(userId)?.values() ?? [])],
+    });
+
+    // Established conversations (server-authoritative; symmetric for both sides).
+    const contacts = await this.loadContacts(userId);
+    this.send(conn, {
+      type: "conversations:snapshot",
+      conversations: contacts.map((c) => ({
+        conversationId: c.conversationId,
+        peer: { userId: c.peerUserId, username: c.peerUsername },
+      })),
     });
 
     // Anything queued while offline (accepted/rejected notices).
@@ -150,6 +187,18 @@ export default class LobbyServer implements Party.Server {
       fromUserId,
     );
     const meUser: PresenceUser = { userId: me.userId, username: me.username };
+
+    // Persist the relationship for BOTH sides (server-authoritative).
+    await this.addContact(me.userId, {
+      conversationId,
+      peerUserId: requester.userId,
+      peerUsername: requester.username,
+    });
+    await this.addContact(fromUserId, {
+      conversationId,
+      peerUserId: meUser.userId,
+      peerUsername: meUser.username,
+    });
 
     // Notify the accepter (online) and the requester (online or queued).
     this.sendToUser(me.userId, {

@@ -51,7 +51,7 @@ terminal, modern glass" look — deep ink background, phosphor-lime accent, mono
 identifiers, glass cards, subtle grid + glow. Mobile-first and fully responsive.
 
 ## Status
-**Phases 0–6 complete.**
+**Phases 0–7 complete** (unread badges deferred).
 - Phase 0: scaffold, deps, PartyKit skeleton, Turso client + migration, env.
 - Phase 1: signup/login/logout/me + username lookup + PartyKit connect-token APIs;
   client-side ECDH keygen, passphrase-wrapped private key in IndexedDB; signup/login UI.
@@ -67,11 +67,15 @@ identifiers, glass cards, subtle grid + glow. Mobile-first and fully responsive.
 - Phase 6: per-conversation persistence toggle (both must opt in), ciphertext-only
   history in DO storage with replay-on-join and clear-history; key-unlock gate so
   the private key survives page reloads (passphrase prompt only when needed).
+- Multi-device: zero-knowledge encrypted key backup (restore on any device with
+  the passphrase).
+- Phase 7: server-authoritative conversation list (symmetric for both parties,
+  survives reload/new device), peer presence dots, accessibility + responsive polish.
 
 Verify scripts:
 - Realtime (needs `npm run party:dev`): `npx tsx scripts/presence-check.ts`,
   `npx tsx scripts/handshake-check.ts`, `npx tsx scripts/messaging-check.ts`,
   `npx tsx scripts/persistence-check.ts`.
-- Crypto (standalone): `npx tsx scripts/crypto-check.ts`.
+- Standalone: `npx tsx scripts/crypto-check.ts`, `npx tsx scripts/keybackup-check.ts`.
 
-Next: **Phase 7 — UX polish** (see ROADMAP.md).
+Next: **Phase 8 — Hardening & deploy** (see ROADMAP.md).

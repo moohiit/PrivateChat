@@ -16,6 +16,7 @@ import {
 } from "@/lib/crypto/conversation";
 import { putConversationKey } from "@/lib/crypto/keystore";
 import { getUnlockedKey } from "@/lib/crypto/session-key";
+import { loadConversations, saveConversation } from "@/lib/crypto/idb";
 import type {
   Conversation,
   LobbyClientMessage,
@@ -79,6 +80,15 @@ function reduce(state: LobbyState, msg: LobbyServerMessage): LobbyState {
       };
     case "requests:snapshot":
       return { ...state, incoming: msg.incoming };
+    case "conversations:snapshot": {
+      const known = new Set(state.conversations.map((c) => c.conversationId));
+      const added = msg.conversations.filter(
+        (c) => !known.has(c.conversationId),
+      );
+      return added.length
+        ? { ...state, conversations: [...state.conversations, ...added] }
+        : state;
+    }
     case "request:incoming":
       return state.incoming.some((u) => u.userId === msg.from.userId)
         ? state
@@ -137,6 +147,41 @@ export function LobbyProvider({
       setConvoCrypto((prev) => ({ ...prev, [conversationId]: value })),
     [],
   );
+
+  // Restore the saved conversation list on load (reload-resilient), then keep
+  // it persisted as conversations are added.
+  useEffect(() => {
+    let active = true;
+    loadConversations(selfUserId).then((saved) => {
+      if (!active || saved.length === 0) return;
+      setState((s) => {
+        const known = new Set(s.conversations.map((c) => c.conversationId));
+        const restored = saved
+          .filter((c) => !known.has(c.conversationId))
+          .map((c) => ({
+            conversationId: c.conversationId,
+            peer: { userId: c.peerUserId, username: c.peerUsername },
+          }));
+        return restored.length
+          ? { ...s, conversations: [...s.conversations, ...restored] }
+          : s;
+      });
+    });
+    return () => {
+      active = false;
+    };
+  }, [selfUserId]);
+
+  useEffect(() => {
+    for (const c of state.conversations) {
+      void saveConversation(selfUserId, {
+        conversationId: c.conversationId,
+        peerUserId: c.peer.userId,
+        peerUsername: c.peer.username,
+        updatedAt: Date.now(),
+      });
+    }
+  }, [state.conversations, selfUserId]);
 
   // Derive a per-conversation AES key (ECDH -> HKDF) the moment a conversation
   // is established, and compute its safety number for out-of-band verification.

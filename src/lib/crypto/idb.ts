@@ -11,7 +11,8 @@ import type { WrappedPrivateKey } from "./keys";
 const DB_NAME = "privatechat";
 const IDENTITY_STORE = "identity";
 const UNLOCKED_STORE = "unlocked";
-const VERSION = 2;
+const CONVERSATIONS_STORE = "conversations";
+const VERSION = 3;
 
 export type StoredIdentity = {
   userId: string;
@@ -33,6 +34,12 @@ function openDb(): Promise<IDBDatabase> {
       }
       if (!db.objectStoreNames.contains(UNLOCKED_STORE)) {
         db.createObjectStore(UNLOCKED_STORE, { keyPath: "userId" });
+      }
+      if (!db.objectStoreNames.contains(CONVERSATIONS_STORE)) {
+        const store = db.createObjectStore(CONVERSATIONS_STORE, {
+          keyPath: "key",
+        });
+        store.createIndex("owner", "owner", { unique: false });
       }
     };
     req.onsuccess = () => resolve(req.result);
@@ -99,4 +106,46 @@ export function clearUnwrappedKeys(): Promise<void> {
   return tx<undefined>(UNLOCKED_STORE, "readwrite", (store) =>
     store.clear(),
   ).then(() => undefined);
+}
+
+/* ----------------------- conversation list ----------------------------- */
+
+export type StoredConversation = {
+  conversationId: string;
+  peerUserId: string;
+  peerUsername: string;
+  updatedAt: number;
+};
+
+type ConversationRecord = StoredConversation & { key: string; owner: string };
+
+/** Persist a conversation so it survives reloads (keyed per owner account). */
+export function saveConversation(
+  owner: string,
+  convo: StoredConversation,
+): Promise<IDBValidKey> {
+  const record: ConversationRecord = {
+    key: `${owner}:${convo.conversationId}`,
+    owner,
+    ...convo,
+  };
+  return tx(CONVERSATIONS_STORE, "readwrite", (store) => store.put(record));
+}
+
+export async function loadConversations(
+  owner: string,
+): Promise<StoredConversation[]> {
+  const all = await tx<ConversationRecord[]>(
+    CONVERSATIONS_STORE,
+    "readonly",
+    (store) => store.index("owner").getAll(owner),
+  );
+  return (all ?? [])
+    .map(({ conversationId, peerUserId, peerUsername, updatedAt }) => ({
+      conversationId,
+      peerUserId,
+      peerUsername,
+      updatedAt,
+    }))
+    .sort((a, b) => b.updatedAt - a.updatedAt);
 }

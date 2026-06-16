@@ -114,7 +114,13 @@ export default function ChatView({
       </div>
 
       {/* Messages */}
-      <div ref={scrollRef} className="flex-1 space-y-2 overflow-y-auto px-4 py-4">
+      <div
+        ref={scrollRef}
+        role="log"
+        aria-live="polite"
+        aria-label={`Conversation with ${peer.username}`}
+        className="flex-1 space-y-2 overflow-y-auto px-4 py-4"
+      >
         {!keyReady && (
           <Banner>
             Encryption key isn&apos;t loaded yet. If this persists, unlock your
@@ -159,6 +165,7 @@ export default function ChatView({
           onBlur={() => setTyping(false)}
           placeholder={keyReady ? "Write a message…" : "Encryption unavailable"}
           disabled={!keyReady}
+          aria-label={`Message to ${peer.username}`}
           className="field flex-1 px-3 py-2.5 text-base text-foreground sm:text-sm"
           autoComplete="off"
         />
@@ -217,7 +224,11 @@ function StatusTick({ status }: { status: MessageStatus }) {
     failed: "✕",
   };
   return (
-    <span className={status === "read" ? "font-semibold" : ""}>
+    <span
+      className={status === "read" ? "font-semibold" : ""}
+      aria-label={status}
+      title={status}
+    >
       {map[status]}
     </span>
   );

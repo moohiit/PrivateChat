@@ -136,10 +136,17 @@ remains end-to-end encrypted and unreadable by any server.
 - Known gap: conversation LIST doesn't persist across reload yet (handshake re-needed);
   stored message history does. Candidate for a Phase 7 polish item.
 
-### Phase 7 — UX polish
-- [ ] Conversation list, unread badges, typing indicators.
-- [ ] Key-loss / new-device messaging (old history unreadable by design).
-- [ ] Responsive + accessible UI.
+### Phase 7 — UX polish ✅ (unread badges deferred)
+- [x] Conversation list: **server-authoritative** (lobby persists contacts for both
+      members in DO storage; `conversations:snapshot` on connect) + IndexedDB cache,
+      so it's symmetric for both parties and survives reload/new device. Fixes the
+      "one side has the conversation, the other doesn't" bug.
+- [x] Peer presence dots in the conversation list; typing indicators (in ChatView).
+- [x] Key-loss / new-device messaging: multi-device encrypted key backup + UnlockGate.
+- [x] Accessibility: focus-visible rings, reduced-motion, ARIA roles/labels, live region.
+- [x] Responsive throughout (mobile-first).
+- [ ] Unread badges — deferred: needs always-on per-conversation subscriptions.
+- [x] Verified: all 6 scripts pass (38 checks), incl. conversations:snapshot on reconnect.
 
 ### Phase 8 — Hardening & deploy
 - [ ] Rate-limit auth + requests; validate all input (Zod).
