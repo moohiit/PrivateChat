@@ -226,7 +226,7 @@ function OnlineCard() {
 }
 
 function ConversationsCard() {
-  const { conversations } = useLobby();
+  const { conversations, convoCrypto } = useLobby();
   return (
     <Card title="Conversations" count={conversations.length}>
       {conversations.length === 0 ? (
@@ -236,17 +236,11 @@ function ConversationsCard() {
       ) : (
         <ul className="flex flex-col gap-2">
           {conversations.map((c) => (
-            <li
+            <ConversationRow
               key={c.conversationId}
-              className="flex items-center justify-between gap-3 rounded-lg bg-surface-strong px-3 py-2.5"
-            >
-              <span className="identifier truncate text-sm">
-                @{c.peer.username}
-              </span>
-              <span className="identifier shrink-0 text-xs text-faint">
-                {c.conversationId.slice(0, 8)}…
-              </span>
-            </li>
+              username={c.peer.username}
+              crypto={convoCrypto[c.conversationId]}
+            />
           ))}
         </ul>
       )}
@@ -256,6 +250,79 @@ function ConversationsCard() {
         </p>
       )}
     </Card>
+  );
+}
+
+const CRYPTO_LABEL: Record<string, { text: string; color: string }> = {
+  deriving: { text: "deriving key…", color: "var(--warn)" },
+  ready: { text: "encrypted", color: "var(--accent)" },
+  locked: { text: "key locked", color: "var(--warn)" },
+  error: { text: "key error", color: "var(--danger)" },
+};
+
+function ConversationRow({
+  username,
+  crypto,
+}: {
+  username: string;
+  crypto?: { status: string; safetyNumber?: string };
+}) {
+  const [open, setOpen] = useState(false);
+  const status = crypto?.status ?? "deriving";
+  const badge = CRYPTO_LABEL[status] ?? CRYPTO_LABEL.deriving;
+
+  return (
+    <li className="rounded-lg bg-surface-strong px-3 py-2.5">
+      <div className="flex items-center justify-between gap-3">
+        <span className="flex min-w-0 items-center gap-2.5">
+          <ShieldGlyph color={badge.color} />
+          <span className="identifier truncate text-sm">@{username}</span>
+        </span>
+        <span className="flex shrink-0 items-center gap-2">
+          <span className="text-xs" style={{ color: badge.color }}>
+            {badge.text}
+          </span>
+          {status === "ready" && crypto?.safetyNumber && (
+            <button
+              onClick={() => setOpen((v) => !v)}
+              className="btn-ghost rounded-md px-2 py-1 text-xs"
+            >
+              {open ? "Hide" : "Verify"}
+            </button>
+          )}
+        </span>
+      </div>
+
+      {open && crypto?.safetyNumber && (
+        <div className="mt-3 rounded-lg border border-border-soft bg-black/30 p-3">
+          <p className="mb-2 text-xs text-faint">
+            Compare this safety number with @{username} over another channel. If
+            it matches, your connection has no eavesdropper.
+          </p>
+          <p className="identifier text-sm leading-relaxed tracking-wide text-accent">
+            {crypto.safetyNumber}
+          </p>
+        </div>
+      )}
+    </li>
+  );
+}
+
+function ShieldGlyph({ color }: { color: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      className="h-4 w-4 shrink-0"
+      fill="none"
+      stroke={color}
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d="M12 2 4 5v6c0 5 3.5 8.5 8 11 4.5-2.5 8-6 8-11V5l-8-3Z" />
+      <path d="m9 12 2 2 4-4" />
+    </svg>
   );
 }
 

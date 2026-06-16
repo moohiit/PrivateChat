@@ -51,7 +51,7 @@ terminal, modern glass" look — deep ink background, phosphor-lime accent, mono
 identifiers, glass cards, subtle grid + glow. Mobile-first and fully responsive.
 
 ## Status
-**Phases 0–3 complete.**
+**Phases 0–4 complete.**
 - Phase 0: scaffold, deps, PartyKit skeleton, Turso client + migration, env.
 - Phase 1: signup/login/logout/me + username lookup + PartyKit connect-token APIs;
   client-side ECDH keygen, passphrase-wrapped private key in IndexedDB; signup/login UI.
@@ -59,8 +59,12 @@ identifiers, glass cards, subtle grid + glow. Mobile-first and fully responsive.
   (snapshot / online / offline); responsive branded UI.
 - Phase 3: chat-request handshake (send/accept/reject, offline delivery), stable
   HMAC conversation id, unified LobbyProvider + Dashboard UI.
+- Phase 4: ECDH -> HKDF -> AES-256-GCM per-conversation key agreement, in-memory
+  keystore, and a verifiable 60-digit safety number per conversation.
 
-Verify the realtime layer (with `npm run party:dev` running):
-`npx tsx scripts/presence-check.ts` and `npx tsx scripts/handshake-check.ts`.
+Verify scripts:
+- Realtime (needs `npm run party:dev`): `npx tsx scripts/presence-check.ts`,
+  `npx tsx scripts/handshake-check.ts`.
+- Crypto (standalone): `npx tsx scripts/crypto-check.ts`.
 
-Next: **Phase 4 — E2E key exchange** (see ROADMAP.md).
+Next: **Phase 5 — Messaging** (see ROADMAP.md).

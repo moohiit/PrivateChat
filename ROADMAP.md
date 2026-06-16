@@ -109,10 +109,12 @@ remains end-to-end encrypted and unreadable by any server.
 - [x] Unified `LobbyProvider` context + Dashboard UI (new-chat, requests, online, conversations).
 - [x] Verified via `scripts/handshake-check.ts` (send/accept/reject, offline delivery, shared id).
 
-### Phase 4 — E2E key exchange
-- [ ] Public-key fetch endpoint (Vercel → Turso).
-- [ ] ECDH → HKDF → AES-GCM key derivation utility (shared client lib).
-- [ ] Verify-fingerprint UI (safety-number style) to defend against MITM.
+### Phase 4 — E2E key exchange ✅
+- [x] Public-key fetch endpoint (Vercel → Turso): `/api/users/key?userId=`.
+- [x] ECDH → HKDF(salt=conversationId) → AES-256-GCM derivation utility (shared client lib).
+- [x] Derive + cache key per conversation on accept; in-memory keystore; clear on logout.
+- [x] Verify-fingerprint UI: 60-digit safety number (order-independent) shown per conversation.
+- [x] Verified via `scripts/crypto-check.ts` (shared key, round-trip, eavesdropper + cross-convo fail).
 
 ### Phase 5 — Messaging
 - [ ] Conversation room: `message:send` (ciphertext+iv) → relay to the other member.

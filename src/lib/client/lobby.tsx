@@ -9,6 +9,13 @@ import {
   useState,
 } from "react";
 import { createLobbySocket } from "./party";
+import {
+  importPeerPublicKey,
+  deriveConversationKey,
+  computeSafetyNumber,
+} from "@/lib/crypto/conversation";
+import { putConversationKey } from "@/lib/crypto/keystore";
+import { getUnlockedKey } from "@/lib/crypto/session-key";
 import type {
   Conversation,
   LobbyClientMessage,
@@ -17,6 +24,13 @@ import type {
 } from "@/lib/protocol";
 
 export type ConnStatus = "connecting" | "connected" | "disconnected";
+
+export type CryptoStatus = "deriving" | "ready" | "locked" | "error";
+
+export type ConversationCrypto = {
+  status: CryptoStatus;
+  safetyNumber?: string;
+};
 
 type LobbyState = {
   status: ConnStatus;
@@ -29,6 +43,7 @@ type LobbyState = {
 
 type LobbyContextValue = LobbyState & {
   selfUserId: string;
+  convoCrypto: Record<string, ConversationCrypto>;
   sendRequest: (toUserId: string) => void;
   requestByUsername: (
     username: string,
@@ -110,7 +125,68 @@ export function LobbyProvider({
   children: React.ReactNode;
 }) {
   const [state, setState] = useState<LobbyState>(INITIAL);
+  const [convoCrypto, setConvoCrypto] = useState<
+    Record<string, ConversationCrypto>
+  >({});
   const socketRef = useRef<ReturnType<typeof createLobbySocket> | null>(null);
+  const derivedRef = useRef<Set<string>>(new Set());
+  const selfPubRef = useRef<string | null>(null);
+
+  const setCrypto = useCallback(
+    (conversationId: string, value: ConversationCrypto) =>
+      setConvoCrypto((prev) => ({ ...prev, [conversationId]: value })),
+    [],
+  );
+
+  // Derive a per-conversation AES key (ECDH -> HKDF) the moment a conversation
+  // is established, and compute its safety number for out-of-band verification.
+  useEffect(() => {
+    async function ensureSelfPub(): Promise<string | null> {
+      if (selfPubRef.current) return selfPubRef.current;
+      const res = await fetch(`/api/users/key?userId=${selfUserId}`);
+      if (!res.ok) return null;
+      const { publicKey } = (await res.json()) as { publicKey: string };
+      selfPubRef.current = publicKey;
+      return publicKey;
+    }
+
+    async function derive(convo: Conversation) {
+      setCrypto(convo.conversationId, { status: "deriving" });
+      try {
+        const myPrivateKey = getUnlockedKey();
+        if (!myPrivateKey) {
+          setCrypto(convo.conversationId, { status: "locked" });
+          return;
+        }
+        const res = await fetch(`/api/users/key?userId=${convo.peer.userId}`);
+        if (!res.ok) throw new Error("key fetch failed");
+        const { publicKey } = (await res.json()) as { publicKey: string };
+
+        const peerPublicKey = await importPeerPublicKey(publicKey);
+        const key = await deriveConversationKey(
+          myPrivateKey,
+          peerPublicKey,
+          convo.conversationId,
+        );
+        putConversationKey(convo.conversationId, key);
+
+        const selfPub = await ensureSelfPub();
+        const safetyNumber = selfPub
+          ? await computeSafetyNumber(selfPub, publicKey)
+          : undefined;
+        setCrypto(convo.conversationId, { status: "ready", safetyNumber });
+      } catch {
+        setCrypto(convo.conversationId, { status: "error" });
+      }
+    }
+
+    for (const convo of state.conversations) {
+      if (!derivedRef.current.has(convo.conversationId)) {
+        derivedRef.current.add(convo.conversationId);
+        void derive(convo);
+      }
+    }
+  }, [state.conversations, selfUserId, setCrypto]);
 
   useEffect(() => {
     const socket = createLobbySocket();
@@ -193,6 +269,7 @@ export function LobbyProvider({
       value={{
         ...state,
         selfUserId,
+        convoCrypto,
         sendRequest,
         requestByUsername,
         accept,

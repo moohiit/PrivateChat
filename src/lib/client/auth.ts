@@ -12,6 +12,7 @@ import {
   getWrappedKey,
 } from "@/lib/crypto/idb";
 import { setUnlockedKey, clearUnlockedKey } from "@/lib/crypto/session-key";
+import { clearConversationKeys } from "@/lib/crypto/keystore";
 
 export type AuthResult = {
   userId: string;
@@ -86,5 +87,6 @@ export async function login(
 
 export async function logout(): Promise<void> {
   clearUnlockedKey();
+  clearConversationKeys();
   await postJson("/api/auth/logout", {});
 }
