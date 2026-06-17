@@ -12,7 +12,9 @@ const DB_NAME = "privatechat";
 const IDENTITY_STORE = "identity";
 const UNLOCKED_STORE = "unlocked";
 const CONVERSATIONS_STORE = "conversations";
-const VERSION = 3;
+// Bump when adding stores. onupgradeneeded creates any missing store
+// idempotently, so a bump repairs a DB left half-upgraded by an earlier reload.
+const VERSION = 4;
 
 export type StoredIdentity = {
   userId: string;
@@ -42,6 +44,11 @@ function openDb(): Promise<IDBDatabase> {
         store.createIndex("owner", "owner", { unique: false });
       }
     };
+    // Another tab holding an older version blocks the upgrade — ask it to close.
+    req.onblocked = () =>
+      console.warn(
+        "PrivateChat: IndexedDB upgrade blocked by another tab. Close other tabs.",
+      );
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
   });
@@ -120,26 +127,35 @@ export type StoredConversation = {
 type ConversationRecord = StoredConversation & { key: string; owner: string };
 
 /** Persist a conversation so it survives reloads (keyed per owner account). */
-export function saveConversation(
+export async function saveConversation(
   owner: string,
   convo: StoredConversation,
-): Promise<IDBValidKey> {
+): Promise<void> {
   const record: ConversationRecord = {
     key: `${owner}:${convo.conversationId}`,
     owner,
     ...convo,
   };
-  return tx(CONVERSATIONS_STORE, "readwrite", (store) => store.put(record));
+  try {
+    await tx(CONVERSATIONS_STORE, "readwrite", (store) => store.put(record));
+  } catch {
+    /* best-effort cache; server is the source of truth */
+  }
 }
 
 export async function loadConversations(
   owner: string,
 ): Promise<StoredConversation[]> {
-  const all = await tx<ConversationRecord[]>(
-    CONVERSATIONS_STORE,
-    "readonly",
-    (store) => store.index("owner").getAll(owner),
-  );
+  let all: ConversationRecord[];
+  try {
+    all = await tx<ConversationRecord[]>(
+      CONVERSATIONS_STORE,
+      "readonly",
+      (store) => store.index("owner").getAll(owner),
+    );
+  } catch {
+    return []; // server's conversations:snapshot will repopulate
+  }
   return (all ?? [])
     .map(({ conversationId, peerUserId, peerUsername, updatedAt }) => ({
       conversationId,
