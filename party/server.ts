@@ -21,6 +21,10 @@ import type {
 
 type ConnState = { userId: string; username: string; peerId: string };
 
+// Max base64 ciphertext length (~96 KB of ciphertext). Guards against oversized
+// frames and storage abuse; the UI sends short text messages.
+const MAX_CIPHERTEXT = 131_072;
+
 const PREFS_KEY = "meta:prefs";
 const MEMBERS_KEY = "meta:members";
 const MSG_PREFIX = "msg:";
@@ -117,6 +121,15 @@ export default class ConversationServer implements Party.Server {
 
     switch (msg.type) {
       case "message:send": {
+        // Drop oversized/malformed frames (guards against abuse).
+        if (
+          typeof msg.ciphertext !== "string" ||
+          msg.ciphertext.length > MAX_CIPHERTEXT ||
+          typeof msg.iv !== "string" ||
+          msg.iv.length > 256
+        ) {
+          return;
+        }
         this.broadcastExcept(sender.id, {
           type: "message:relay",
           id: msg.id,

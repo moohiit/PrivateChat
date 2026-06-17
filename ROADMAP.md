@@ -159,11 +159,18 @@ remains end-to-end encrypted and unreadable by any server.
 - [x] Verified: presence-check (visibility transitions), handshake-check (contacts see
       each other online while both hidden; hidden contact in reconnect snapshot).
 
-### Phase 8 — Hardening & deploy
-- [ ] Rate-limit auth + requests; validate all input (Zod).
-- [ ] Security headers, CSRF on API routes, secure cookies, JWT short TTL + rotation.
-- [ ] Threat-model review (MITM, replay, metadata leakage, room-id guessing).
-- [ ] Deploy: Next.js → Vercel, PartyKit → Cloudflare, Turso DB; env/secrets wired.
+### Phase 8 — Hardening & deploy ✅ (code) / 📋 (deploy = your accounts)
+- [x] Best-effort rate-limit on signup/login; all input Zod-validated.
+- [x] Security headers (CSP scoped to self + PartyKit, X-Frame DENY, nosniff,
+      Referrer-Policy, Permissions-Policy, HSTS in prod) via next.config.
+- [x] CSRF: Origin-check proxy on `/api` POST + httpOnly/Secure/SameSite=Lax cookies.
+- [x] Short JWT TTLs (session 7d, connect 5m, conversation ticket 10m); unguessable
+      room ids; conversation room drops oversized ciphertext frames.
+- [x] Threat-model review written: [SECURITY.md](SECURITY.md).
+- [x] Deploy guide written: [DEPLOY.md](DEPLOY.md) (Vercel + PartyKit + Turso, shared
+      JWT_SECRET, env wiring). Executing the deploy needs your accounts.
+- [x] Verified live: headers present, cross-origin POST → 403, rate limit → 429;
+      all realtime/crypto scripts still pass.
 
 ---
 

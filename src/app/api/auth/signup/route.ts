@@ -4,8 +4,17 @@ import { createUser, createKeyBackup, getUserByUsername } from "@/lib/users";
 import { hashPassword } from "@/lib/auth-hash";
 import { createSession } from "@/lib/session";
 import { newId } from "@/lib/ids";
+import { rateLimit, clientIp } from "@/lib/rate-limit";
 
 export async function POST(req: Request) {
+  const limit = rateLimit(`signup:${clientIp(req)}`, 5, 60_000);
+  if (!limit.ok) {
+    return NextResponse.json(
+      { error: "too many attempts, try again shortly" },
+      { status: 429, headers: { "Retry-After": String(Math.ceil(limit.retryAfterMs / 1000)) } },
+    );
+  }
+
   const body = await req.json().catch(() => null);
   const parsed = signupSchema.safeParse(body);
   if (!parsed.success) {

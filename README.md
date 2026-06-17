@@ -38,12 +38,9 @@ npm run party:dev   # PartyKit realtime server on http://127.0.0.1:1999
 npm run dev         # Next.js app on http://localhost:3000
 ```
 
-## Production deploy (later phases)
-- **Next.js → Vercel.** Set env vars: `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN`,
-  `JWT_SECRET`, `NEXT_PUBLIC_PARTYKIT_HOST` (your `*.partykit.dev` host).
-- **PartyKit → Cloudflare:** `npm run party:deploy`. Set the matching secret:
-  `npx partykit env add JWT_SECRET` (must equal Vercel's `JWT_SECRET`).
-- **Turso:** `turso db create privatechat`, then wire the URL/token into Vercel.
+## Production deploy
+See **[DEPLOY.md](DEPLOY.md)** for the full guide (Vercel + PartyKit + Turso, shared
+`JWT_SECRET`, env wiring) and **[SECURITY.md](SECURITY.md)** for the threat model.
 
 ## Design
 Custom brand system in [src/app/globals.css](src/app/globals.css): an "encrypted
@@ -51,7 +48,7 @@ terminal, modern glass" look — deep ink background, phosphor-lime accent, mono
 identifiers, glass cards, subtle grid + glow. Mobile-first and fully responsive.
 
 ## Status
-**Phases 0–7 complete** (unread badges deferred).
+**Phases 0–8 complete** (unread badges deferred; deploy steps documented in DEPLOY.md).
 - Phase 0: scaffold, deps, PartyKit skeleton, Turso client + migration, env.
 - Phase 1: signup/login/logout/me + username lookup + PartyKit connect-token APIs;
   client-side ECDH keygen, passphrase-wrapped private key in IndexedDB; signup/login UI.
@@ -74,6 +71,8 @@ identifiers, glass cards, subtle grid + glow. Mobile-first and fully responsive.
 - Privacy: opt-in public discoverability (default off — hidden from the "Online now"
   browse list); still reachable by username search; contact-aware presence so people
   you already chat with see each other online even when hidden.
+- Phase 8: hardening — security headers/CSP, CSRF origin-check proxy, auth rate limiting,
+  payload caps, threat model (SECURITY.md) + deploy guide (DEPLOY.md).
 
 Verify scripts:
 - Realtime (needs `npm run party:dev`): `npx tsx scripts/presence-check.ts`,
@@ -81,4 +80,4 @@ Verify scripts:
   `npx tsx scripts/persistence-check.ts`.
 - Standalone: `npx tsx scripts/crypto-check.ts`, `npx tsx scripts/keybackup-check.ts`.
 
-Next: **Phase 8 — Hardening & deploy** (see ROADMAP.md).
+All phases complete. To ship it, follow [DEPLOY.md](DEPLOY.md).

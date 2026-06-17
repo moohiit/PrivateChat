@@ -3,8 +3,17 @@ import { loginSchema } from "@/lib/validation";
 import { getUserByUsername } from "@/lib/users";
 import { verifyPassword } from "@/lib/auth-hash";
 import { createSession } from "@/lib/session";
+import { rateLimit, clientIp } from "@/lib/rate-limit";
 
 export async function POST(req: Request) {
+  const limit = rateLimit(`login:${clientIp(req)}`, 10, 60_000);
+  if (!limit.ok) {
+    return NextResponse.json(
+      { error: "too many attempts, try again shortly" },
+      { status: 429, headers: { "Retry-After": String(Math.ceil(limit.retryAfterMs / 1000)) } },
+    );
+  }
+
   const body = await req.json().catch(() => null);
   const parsed = loginSchema.safeParse(body);
   if (!parsed.success) {
