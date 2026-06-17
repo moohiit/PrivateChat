@@ -37,8 +37,10 @@ yarn-error.log*
 # vercel
 .vercel
 
-# partykit
+# partykit / wrangler / cloudflare
 .partykit/
+.wrangler/
+.dev.vars
 
 # local libSQL dev database
 local.db
