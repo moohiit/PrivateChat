@@ -7,8 +7,9 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "party:dev": "partykit dev --port 1999",
-    "party:deploy": "partykit deploy",
+    "party:dev": "wrangler dev",
+    "party:deploy": "wrangler deploy",
+    "party:typecheck": "tsc -p party/tsconfig.json",
     "migrate": "tsx scripts/migrate.ts"
   },
   "dependencies": {
@@ -16,6 +17,7 @@
     "@node-rs/argon2": "^2.0.2",
     "jose": "^5.9.6",
     "next": "16.2.9",
+    "partyserver": "^0.5.8",
     "partysocket": "^1.1.4",
     "react": "19.2.4",
     "react-dom": "19.2.4",
@@ -32,6 +34,7 @@
     "partykit": "^0.0.115",
     "tailwindcss": "^4",
     "tsx": "^4.19.2",
-    "typescript": "^5"
+    "typescript": "^5",
+    "wrangler": "^4.101.0"
   }
 }

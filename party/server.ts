@@ -1,5 +1,11 @@
-import type * as Party from "partykit/server";
+import {
+  Server,
+  type Connection,
+  type ConnectionContext,
+  type WSMessage,
+} from "partyserver";
 import { verifyConversationTicket } from "./auth";
+import type { Env } from "./env";
 import type {
   ChatClientMessage,
   ChatServerMessage,
@@ -7,22 +13,19 @@ import type {
 } from "../src/lib/protocol";
 
 /**
- * Conversation room (the default "main" party). One instance per conversation,
- * named by the conversation id. Only the two members may join (enforced by the
- * signed conversation ticket whose `cid` must equal this room's id). It relays
- * ciphertext + receipts + typing between members and reports peer presence.
+ * Conversation room (bound as "Main" → /parties/main/<conversationId>). One
+ * instance per conversation, named by the conversation id (this.name). Only the
+ * two members may join (the signed ticket's `cid` must equal this.name). It
+ * relays ciphertext + receipts + typing and reports peer room-presence.
  *
- * Persistence (Phase 6): each member sets a persist preference. History is
- * stored ONLY while both agree (effective = AND of both prefs). Stored blobs are
- * ciphertext-only — the server can never read them. History replays on join.
- *
+ * Persistence: each member sets a persist preference; history is stored only
+ * while both agree (effective = AND). Stored blobs are ciphertext-only.
  * Zero-knowledge: it only ever sees ciphertext, never keys or plaintext.
  */
 
 type ConnState = { userId: string; username: string; peerId: string };
 
-// Max base64 ciphertext length (~96 KB of ciphertext). Guards against oversized
-// frames and storage abuse; the UI sends short text messages.
+// Max base64 ciphertext length (~96 KB). Guards against oversized frames.
 const MAX_CIPHERTEXT = 131_072;
 
 const PREFS_KEY = "meta:prefs";
@@ -30,7 +33,7 @@ const MEMBERS_KEY = "meta:members";
 const MSG_PREFIX = "msg:";
 const MAX_HISTORY = 500;
 
-export default class ConversationServer implements Party.Server {
+export class ConversationServer extends Server<Env> {
   /** userId -> connection ids (one user may have multiple tabs/devices) */
   private readonly members = new Map<string, Set<string>>();
 
@@ -40,77 +43,72 @@ export default class ConversationServer implements Party.Server {
   private pair: string[] = [];
   private loaded = false;
 
-  constructor(readonly room: Party.Room) {}
-
-  static async onBeforeConnect(request: Party.Request, lobby: Party.Lobby) {
-    try {
-      const token = new URL(request.url).searchParams.get("token") ?? "";
-      const claims = await verifyConversationTicket(
-        token,
-        lobby.env.JWT_SECRET as string,
-      );
-      if (claims.conversationId !== lobby.id) {
-        return new Response("Forbidden", { status: 403 });
-      }
-      request.headers.set("X-User-Id", claims.userId);
-      request.headers.set("X-Username", claims.username);
-      request.headers.set("X-Peer-Id", claims.peerId);
-      return request;
-    } catch {
-      return new Response("Unauthorized", { status: 401 });
-    }
-  }
-
   private async ensureLoaded() {
     if (this.loaded) return;
     this.prefs =
-      (await this.room.storage.get<Record<string, boolean>>(PREFS_KEY)) ?? {};
-    this.pair = (await this.room.storage.get<string[]>(MEMBERS_KEY)) ?? [];
+      (await this.ctx.storage.get<Record<string, boolean>>(PREFS_KEY)) ?? {};
+    this.pair = (await this.ctx.storage.get<string[]>(MEMBERS_KEY)) ?? [];
     this.loaded = true;
   }
 
-  async onConnect(conn: Party.Connection<ConnState>, ctx: Party.ConnectionContext) {
-    const userId = ctx.request.headers.get("X-User-Id") ?? "";
-    const username = ctx.request.headers.get("X-Username") ?? "";
-    const peerId = ctx.request.headers.get("X-Peer-Id") ?? "";
-    if (!userId) {
-      conn.close(1008, "unauthorized");
+  async onConnect(connection: Connection, ctx: ConnectionContext) {
+    // Ticket + membership were validated pre-upgrade; re-read claims here.
+    let userId: string;
+    let username: string;
+    let peerId: string;
+    try {
+      const token = new URL(ctx.request.url).searchParams.get("token") ?? "";
+      const claims = await verifyConversationTicket(token, this.env.JWT_SECRET);
+      if (claims.conversationId !== this.name) {
+        connection.close(1008, "forbidden");
+        return;
+      }
+      userId = claims.userId;
+      username = claims.username;
+      peerId = claims.peerId;
+    } catch {
+      connection.close(1008, "unauthorized");
       return;
     }
-    conn.setState({ userId, username, peerId });
+    connection.setState({ userId, username, peerId } satisfies ConnState);
     await this.ensureLoaded();
 
-    // Record the conversation's two members the first time we see them.
     if (this.pair.length < 2 && peerId) {
       this.pair = [userId, peerId].sort();
-      await this.room.storage.put(MEMBERS_KEY, this.pair);
+      await this.ctx.storage.put(MEMBERS_KEY, this.pair);
     }
 
     const firstConnForUser = (this.members.get(userId)?.size ?? 0) === 0;
     const conns = this.members.get(userId) ?? new Set<string>();
-    conns.add(conn.id);
+    conns.add(connection.id);
     this.members.set(userId, conns);
 
-    // Peer room-presence.
-    this.send(conn, { type: "peer:presence", online: this.peerOnline(userId) });
+    this.send(connection, {
+      type: "peer:presence",
+      online: this.peerOnline(userId),
+    });
     if (firstConnForUser) {
       this.toPeer(userId, { type: "peer:presence", online: true });
     }
 
-    // Persistence state for this user + any stored history.
-    this.send(conn, {
+    this.send(connection, {
       type: "persist:state",
       mine: this.prefs[userId] === true,
       effective: this.effectivePersist(),
     });
     const history = await this.loadHistory();
-    this.send(conn, { type: "history", messages: history });
+    this.send(connection, { type: "history", messages: history });
   }
 
-  async onMessage(raw: string, sender: Party.Connection<ConnState>) {
-    const me = sender.state;
+  async onMessage(connection: Connection, message: WSMessage) {
+    const me = connection.state as ConnState | null;
     if (!me?.userId) return;
     await this.ensureLoaded();
+
+    const raw =
+      typeof message === "string"
+        ? message
+        : new TextDecoder().decode(message as ArrayBuffer);
 
     let msg: ChatClientMessage;
     try {
@@ -121,7 +119,6 @@ export default class ConversationServer implements Party.Server {
 
     switch (msg.type) {
       case "message:send": {
-        // Drop oversized/malformed frames (guards against abuse).
         if (
           typeof msg.ciphertext !== "string" ||
           msg.ciphertext.length > MAX_CIPHERTEXT ||
@@ -130,7 +127,7 @@ export default class ConversationServer implements Party.Server {
         ) {
           return;
         }
-        this.broadcastExcept(sender.id, {
+        this.broadcastExcept(connection.id, {
           type: "message:relay",
           id: msg.id,
           from: me.userId,
@@ -138,7 +135,6 @@ export default class ConversationServer implements Party.Server {
           iv: msg.iv,
           sentAt: msg.sentAt,
         });
-        // Persist ciphertext only while both members agree.
         if (this.effectivePersist()) {
           const stored: StoredMessage = {
             id: msg.id,
@@ -147,38 +143,41 @@ export default class ConversationServer implements Party.Server {
             iv: msg.iv,
             sentAt: msg.sentAt,
           };
-          await this.room.storage.put(this.msgKey(stored), stored);
+          await this.ctx.storage.put(this.msgKey(stored), stored);
         }
         return;
       }
       case "receipt":
-        this.broadcastExcept(sender.id, {
+        this.broadcastExcept(connection.id, {
           type: "receipt",
           id: msg.id,
           state: msg.state,
         });
         return;
       case "typing":
-        this.broadcastExcept(sender.id, { type: "peer:typing", on: msg.on });
+        this.broadcastExcept(connection.id, {
+          type: "peer:typing",
+          on: msg.on,
+        });
         return;
       case "persist:set":
         this.prefs[me.userId] = msg.on === true;
-        await this.room.storage.put(PREFS_KEY, this.prefs);
+        await this.ctx.storage.put(PREFS_KEY, this.prefs);
         this.broadcastPersistState();
         return;
       case "history:clear":
         await this.clearHistory();
-        this.broadcast({ type: "history:cleared" });
+        this.broadcastAll({ type: "history:cleared" });
         return;
     }
   }
 
-  async onClose(conn: Party.Connection<ConnState>) {
-    this.handleLeave(conn);
+  async onClose(connection: Connection) {
+    this.handleLeave(connection);
   }
 
-  async onError(conn: Party.Connection<ConnState>) {
-    this.handleLeave(conn);
+  async onError(connection: Connection) {
+    this.handleLeave(connection);
   }
 
   /* ----------------------------- persistence ----------------------------- */
@@ -194,7 +193,7 @@ export default class ConversationServer implements Party.Server {
   }
 
   private async loadHistory(): Promise<StoredMessage[]> {
-    const map = await this.room.storage.list<StoredMessage>({
+    const map = await this.ctx.storage.list<StoredMessage>({
       prefix: MSG_PREFIX,
     });
     const all = [...map.values()].sort((a, b) => a.sentAt - b.sentAt);
@@ -202,8 +201,8 @@ export default class ConversationServer implements Party.Server {
   }
 
   private async clearHistory(): Promise<void> {
-    const map = await this.room.storage.list({ prefix: MSG_PREFIX });
-    await Promise.all([...map.keys()].map((k) => this.room.storage.delete(k)));
+    const map = await this.ctx.storage.list({ prefix: MSG_PREFIX });
+    await Promise.all([...map.keys()].map((k) => this.ctx.storage.delete(k)));
   }
 
   private broadcastPersistState() {
@@ -215,18 +214,18 @@ export default class ConversationServer implements Party.Server {
         mine,
         effective,
       } satisfies ChatServerMessage);
-      for (const connId of conns) this.room.getConnection(connId)?.send(data);
+      for (const connId of conns) this.getConnection(connId)?.send(data);
     }
   }
 
   /* ------------------------------ presence ------------------------------- */
 
-  private handleLeave(conn: Party.Connection<ConnState>) {
-    const userId = conn.state?.userId;
+  private handleLeave(connection: Connection) {
+    const userId = (connection.state as ConnState | null)?.userId;
     if (!userId) return;
     const conns = this.members.get(userId);
     if (!conns) return;
-    conns.delete(conn.id);
+    conns.delete(connection.id);
     if (conns.size === 0) {
       this.members.delete(userId);
       this.toPeer(userId, { type: "peer:presence", online: false });
@@ -242,20 +241,20 @@ export default class ConversationServer implements Party.Server {
 
   /* ------------------------------- helpers ------------------------------- */
 
-  private send(conn: Party.Connection<ConnState>, msg: ChatServerMessage) {
-    conn.send(JSON.stringify(msg));
+  private send(connection: Connection, msg: ChatServerMessage) {
+    connection.send(JSON.stringify(msg));
   }
 
-  private broadcast(msg: ChatServerMessage) {
-    this.room.broadcast(JSON.stringify(msg));
+  private broadcastAll(msg: ChatServerMessage) {
+    this.broadcast(JSON.stringify(msg));
   }
 
   private broadcastExcept(connId: string, msg: ChatServerMessage) {
-    this.room.broadcast(JSON.stringify(msg), [connId]);
+    this.broadcast(JSON.stringify(msg), [connId]);
   }
 
   private toPeer(selfUserId: string, msg: ChatServerMessage) {
     const exclude = [...(this.members.get(selfUserId) ?? [])];
-    this.room.broadcast(JSON.stringify(msg), exclude);
+    super.broadcast(JSON.stringify(msg), exclude);
   }
 }

@@ -2,7 +2,7 @@
 
 Two deploy targets that share one secret:
 - **Next.js app → Vercel** (UI + auth/key API routes)
-- **PartyKit server → Cloudflare** (realtime relay, presence, ciphertext storage)
+- **Realtime server → Cloudflare Workers** (Durable Objects via PartyServer + Wrangler)
 - **Turso** (libSQL) for the identity registry + encrypted key backups
 
 The `JWT_SECRET` must be **identical** on Vercel and PartyKit (Vercel signs the
@@ -23,14 +23,16 @@ Apply the schema to the remote DB:
 TURSO_DATABASE_URL=libsql://... TURSO_AUTH_TOKEN=... npm run migrate
 ```
 
-## 2. PartyKit (realtime) → Cloudflare
+## 2. Realtime server → Cloudflare Workers (PartyServer + Wrangler)
 ```bash
-npx partykit login
-npm run party:deploy                       # deploys party/*.ts
-# set the SAME secret PartyKit will verify tokens with:
-npx partykit env add JWT_SECRET            # paste the shared secret
+npx wrangler login                         # Cloudflare account (browser OAuth)
+npx wrangler secret put JWT_SECRET         # paste the SHARED secret
+npm run party:deploy                       # wrangler deploy (Durable Objects)
 ```
-Note the deployed host, e.g. `privatechat.<your-account>.partykit.dev`.
+Note the deployed host from the output, e.g.
+`privatechat-party.<your-subdomain>.workers.dev`.
+
+Local dev uses `npm run party:dev` (wrangler dev on 127.0.0.1:8787).
 
 ## 3. Next.js → Vercel
 Import the repo in Vercel and set **Environment Variables**:
@@ -39,8 +41,8 @@ Import the repo in Vercel and set **Environment Variables**:
 |---|---|
 | `TURSO_DATABASE_URL` | from step 1 |
 | `TURSO_AUTH_TOKEN` | from step 1 |
-| `JWT_SECRET` | the shared secret (same as PartyKit) |
-| `NEXT_PUBLIC_PARTYKIT_HOST` | `privatechat.<account>.partykit.dev` (no scheme) |
+| `JWT_SECRET` | the shared secret (same as the Worker secret) |
+| `NEXT_PUBLIC_PARTYKIT_HOST` | `privatechat-party.<subdomain>.workers.dev` (no scheme) |
 
 Generate a strong secret once:
 ```bash

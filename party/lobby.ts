@@ -1,5 +1,11 @@
-import type * as Party from "partykit/server";
+import {
+  Server,
+  type Connection,
+  type ConnectionContext,
+  type WSMessage,
+} from "partyserver";
 import { verifyConnectToken } from "./auth";
+import type { Env } from "./env";
 import type {
   LobbyClientMessage,
   LobbyServerMessage,
@@ -7,13 +13,10 @@ import type {
 } from "../src/lib/protocol";
 
 /**
- * Presence lobby (the "lobby" party). A single shared room ("main") that:
- *  - tracks who is online (in-memory, multi-connection per user),
- *  - routes chat requests (send / accept / reject),
- *  - on accept, derives a stable, unguessable conversation id (HMAC of the
- *    sorted user-id pair under JWT_SECRET) and hands it to both parties.
- *
- * All state is in-memory and ephemeral — nothing is persisted.
+ * Presence lobby (bound as "Lobby" → /parties/lobby/main). A single shared room
+ * that tracks who is online, routes chat requests, persists contacts, and (on
+ * accept) derives a stable, unguessable conversation id. Presence is tailored
+ * per recipient: you see a user if they are publicly visible OR your contact.
  */
 
 type ConnState = { userId: string; username: string };
@@ -26,7 +29,7 @@ type Contact = {
   peerUsername: string;
 };
 
-export default class LobbyServer implements Party.Server {
+export class LobbyServer extends Server<Env> {
   /** userId -> online connections */
   private readonly online = new Map<string, OnlineEntry>();
   /** targetUserId -> (fromUserId -> requester) : pending incoming requests */
@@ -37,12 +40,10 @@ export default class LobbyServer implements Party.Server {
   private readonly contacts = new Map<string, Contact[]>();
   private readonly contactsLoaded = new Set<string>();
 
-  constructor(readonly room: Party.Room) {}
-
   private async loadContacts(userId: string): Promise<Contact[]> {
     if (!this.contactsLoaded.has(userId)) {
       const stored =
-        (await this.room.storage.get<Contact[]>(`contacts:${userId}`)) ?? [];
+        (await this.ctx.storage.get<Contact[]>(`contacts:${userId}`)) ?? [];
       this.contacts.set(userId, stored);
       this.contactsLoaded.add(userId);
     }
@@ -54,66 +55,51 @@ export default class LobbyServer implements Party.Server {
     if (list.some((c) => c.conversationId === contact.conversationId)) return;
     list.push(contact);
     this.contacts.set(userId, list);
-    await this.room.storage.put(`contacts:${userId}`, list);
+    await this.ctx.storage.put(`contacts:${userId}`, list);
   }
 
-  static async onBeforeConnect(request: Party.Request, lobby: Party.Lobby) {
+  async onConnect(connection: Connection, ctx: ConnectionContext) {
+    // Token was already validated pre-upgrade (onBeforeConnect); re-read claims.
+    let userId: string;
+    let username: string;
     try {
-      const token = new URL(request.url).searchParams.get("token") ?? "";
-      const claims = await verifyConnectToken(
-        token,
-        lobby.env.JWT_SECRET as string,
-      );
-      request.headers.set("X-User-Id", claims.userId);
-      request.headers.set("X-Username", claims.username);
-      return request;
+      const token = new URL(ctx.request.url).searchParams.get("token") ?? "";
+      const claims = await verifyConnectToken(token, this.env.JWT_SECRET);
+      userId = claims.userId;
+      username = claims.username;
     } catch {
-      return new Response("Unauthorized", { status: 401 });
-    }
-  }
-
-  async onConnect(conn: Party.Connection<ConnState>, ctx: Party.ConnectionContext) {
-    const userId = ctx.request.headers.get("X-User-Id") ?? "";
-    const username = ctx.request.headers.get("X-Username") ?? "";
-    if (!userId) {
-      conn.close(1008, "unauthorized");
+      connection.close(1008, "unauthorized");
       return;
     }
-    conn.setState({ userId, username });
+    connection.setState({ userId, username } satisfies ConnState);
 
     const wasOffline = !this.online.has(userId);
     // Visibility is an opt-in, persisted preference (default: private/hidden).
     const visible =
       this.online.get(userId)?.visible ??
-      ((await this.room.storage.get<boolean>(`visible:${userId}`)) ?? false);
+      ((await this.ctx.storage.get<boolean>(`visible:${userId}`)) ?? false);
     const entry = this.online.get(userId) ?? {
       username,
       conns: new Set<string>(),
       visible,
     };
-    entry.conns.add(conn.id);
+    entry.conns.add(connection.id);
     this.online.set(userId, entry);
 
     const contacts = await this.loadContacts(userId);
     const contactIds = new Set(contacts.map((c) => c.peerUserId));
 
     // Presence snapshot: users who are publicly visible OR already a contact.
-    this.send(conn, {
+    this.send(connection, {
       type: "presence:snapshot",
       users: this.visibleTo(userId, contactIds),
     });
-
-    // The user's own visibility state.
-    this.send(conn, { type: "visibility:state", on: entry.visible });
-
-    // Pending incoming requests (survive reloads).
-    this.send(conn, {
+    this.send(connection, { type: "visibility:state", on: entry.visible });
+    this.send(connection, {
       type: "requests:snapshot",
       incoming: [...(this.pending.get(userId)?.values() ?? [])],
     });
-
-    // Established conversations (server-authoritative; symmetric for both sides).
-    this.send(conn, {
+    this.send(connection, {
       type: "conversations:snapshot",
       conversations: contacts.map((c) => ({
         conversationId: c.conversationId,
@@ -121,15 +107,12 @@ export default class LobbyServer implements Party.Server {
       })),
     });
 
-    // Anything queued while offline (accepted/rejected notices).
     const queued = this.outbox.get(userId);
     if (queued?.length) {
-      for (const msg of queued) this.send(conn, msg);
+      for (const msg of queued) this.send(connection, msg);
       this.outbox.delete(userId);
     }
 
-    // Announce online to everyone who may see this user: the public (if visible)
-    // plus this user's contacts (always — contacts see each other regardless).
     if (wasOffline) {
       this.announcePresenceToWatchers(userId, contactIds, entry.visible, {
         type: "presence:online",
@@ -138,17 +121,22 @@ export default class LobbyServer implements Party.Server {
     }
   }
 
-  async onClose(conn: Party.Connection<ConnState>) {
-    await this.handleLeave(conn);
+  async onClose(connection: Connection) {
+    await this.handleLeave(connection);
   }
 
-  async onError(conn: Party.Connection<ConnState>) {
-    await this.handleLeave(conn);
+  async onError(connection: Connection) {
+    await this.handleLeave(connection);
   }
 
-  async onMessage(raw: string, sender: Party.Connection<ConnState>) {
-    const me = sender.state;
+  async onMessage(connection: Connection, message: WSMessage) {
+    const me = connection.state as ConnState | null;
     if (!me?.userId) return;
+
+    const raw =
+      typeof message === "string"
+        ? message
+        : new TextDecoder().decode(message as ArrayBuffer);
 
     let msg: LobbyClientMessage;
     try {
@@ -169,14 +157,9 @@ export default class LobbyServer implements Party.Server {
     }
   }
 
-  /**
-   * Set the user's public discoverability. When visible, they appear in others'
-   * "Online now" list; when hidden, they don't (but remain reachable by anyone
-   * who knows their username via search). Preference is persisted.
-   */
   private async handleVisibility(me: ConnState, on: boolean) {
     const entry = this.online.get(me.userId);
-    await this.room.storage.put(`visible:${me.userId}`, on);
+    await this.ctx.storage.put(`visible:${me.userId}`, on);
     if (!entry) return;
 
     const was = entry.visible;
@@ -214,11 +197,11 @@ export default class LobbyServer implements Party.Server {
     }
     const from: PresenceUser = { userId: me.userId, username: me.username };
 
-    const forTarget = this.pending.get(toUserId) ?? new Map<string, PresenceUser>();
+    const forTarget =
+      this.pending.get(toUserId) ?? new Map<string, PresenceUser>();
     forTarget.set(me.userId, from);
     this.pending.set(toUserId, forTarget);
 
-    // Live delivery if online (also kept in `pending` for reload snapshots).
     if (this.online.has(toUserId)) {
       this.sendToUser(toUserId, { type: "request:incoming", from });
     }
@@ -236,13 +219,12 @@ export default class LobbyServer implements Party.Server {
     this.removePending(me.userId, fromUserId);
 
     const conversationId = await deriveConversationId(
-      this.room.env.JWT_SECRET as string,
+      this.env.JWT_SECRET,
       me.userId,
       fromUserId,
     );
     const meUser: PresenceUser = { userId: me.userId, username: me.username };
 
-    // Persist the relationship for BOTH sides (server-authoritative).
     await this.addContact(me.userId, {
       conversationId,
       peerUserId: requester.userId,
@@ -254,7 +236,6 @@ export default class LobbyServer implements Party.Server {
       peerUsername: meUser.username,
     });
 
-    // Notify the accepter (online) and the requester (online or queued).
     this.sendToUser(me.userId, {
       type: "request:accepted",
       with: requester,
@@ -276,22 +257,23 @@ export default class LobbyServer implements Party.Server {
   private handleReject(me: ConnState, fromUserId: string) {
     if (!this.pending.get(me.userId)?.has(fromUserId)) return;
     this.removePending(me.userId, fromUserId);
-    this.deliverOrQueue(fromUserId, { type: "request:rejected", byUserId: me.userId });
+    this.deliverOrQueue(fromUserId, {
+      type: "request:rejected",
+      byUserId: me.userId,
+    });
   }
 
   /* ------------------------------ presence ------------------------------- */
 
-  private async handleLeave(conn: Party.Connection<ConnState>) {
-    const userId = conn.state?.userId;
+  private async handleLeave(connection: Connection) {
+    const userId = (connection.state as ConnState | null)?.userId;
     if (!userId) return;
     const entry = this.online.get(userId);
     if (!entry) return;
-    entry.conns.delete(conn.id);
+    entry.conns.delete(connection.id);
     if (entry.conns.size === 0) {
       const wasVisible = entry.visible;
       this.online.delete(userId);
-      // Announce offline to everyone who could see them: public (if visible)
-      // plus their contacts.
       const contactIds = new Set(
         (await this.loadContacts(userId)).map((c) => c.peerUserId),
       );
@@ -309,7 +291,6 @@ export default class LobbyServer implements Party.Server {
       .map(([id, e]) => ({ userId: id, username: e.username }));
   }
 
-  /** Send a presence message to everyone who may see `userId`. */
   private announcePresenceToWatchers(
     userId: string,
     contactIds: Set<string>,
@@ -330,8 +311,8 @@ export default class LobbyServer implements Party.Server {
     if (map && map.size === 0) this.pending.delete(targetUserId);
   }
 
-  private send(conn: Party.Connection<ConnState>, msg: LobbyServerMessage) {
-    conn.send(JSON.stringify(msg));
+  private send(connection: Connection, msg: LobbyServerMessage) {
+    connection.send(JSON.stringify(msg));
   }
 
   private sendToUser(userId: string, msg: LobbyServerMessage) {
@@ -339,11 +320,10 @@ export default class LobbyServer implements Party.Server {
     if (!entry) return;
     const data = JSON.stringify(msg);
     for (const connId of entry.conns) {
-      this.room.getConnection(connId)?.send(data);
+      this.getConnection(connId)?.send(data);
     }
   }
 
-  /** Deliver now if online, otherwise queue for the user's next connect. */
   private deliverOrQueue(userId: string, msg: LobbyServerMessage) {
     if (this.online.has(userId)) {
       this.sendToUser(userId, msg);
@@ -357,8 +337,7 @@ export default class LobbyServer implements Party.Server {
 
 /**
  * Stable, unguessable conversation id: HMAC-SHA256(secret, sorted(a,b)),
- * truncated. Deterministic so both parties get the same id; unguessable
- * without the server secret.
+ * truncated. Must match src/lib/conversation-id.ts (asserted in crypto-check).
  */
 async function deriveConversationId(
   secret: string,
@@ -373,7 +352,11 @@ async function deriveConversationId(
     false,
     ["sign"],
   );
-  const sig = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(pair));
+  const sig = await crypto.subtle.sign(
+    "HMAC",
+    key,
+    new TextEncoder().encode(pair),
+  );
   return [...new Uint8Array(sig)]
     .map((x) => x.toString(16).padStart(2, "0"))
     .join("")

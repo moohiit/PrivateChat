@@ -1,0 +1,21 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "privatechat-party",
+  "main": "party/index.ts",
+  "compatibility_date": "2025-01-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true },
+  "durable_objects": {
+    "bindings": [
+      { "name": "Lobby", "class_name": "LobbyServer" },
+      { "name": "Main", "class_name": "ConversationServer" }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      // SQLite-backed Durable Objects work on the Workers Free plan.
+      "new_sqlite_classes": ["LobbyServer", "ConversationServer"]
+    }
+  ]
+}
