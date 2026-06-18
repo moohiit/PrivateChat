@@ -204,13 +204,19 @@ export class ConversationServer extends Server<Env> {
     return all.slice(-MAX_HISTORY);
   }
 
+  /** R2 key for a media id: `<scope>/<cid>/<id>` (scope from the id's first char). */
+  private mediaKey(mediaId: string): string {
+    const scope = mediaId[0] === "p" ? "p" : "e";
+    return `${scope}/${this.name}/${mediaId}`;
+  }
+
   private async clearHistory(): Promise<void> {
     // Delete stored messages AND their R2 media blobs.
     const map = await this.ctx.storage.list<StoredMessage>({ prefix: MSG_PREFIX });
     const ops: Promise<unknown>[] = [];
     for (const [k, m] of map) {
       ops.push(this.ctx.storage.delete(k));
-      if (m.media?.id) ops.push(this.env.MEDIA.delete(`${this.name}/${m.media.id}`));
+      if (m.media?.id) ops.push(this.env.MEDIA.delete(this.mediaKey(m.media.id)));
     }
     await Promise.all(ops);
   }
@@ -224,7 +230,7 @@ export class ConversationServer extends Server<Env> {
     const ids = new Set(items.map((i) => i.id));
     const mediaKeys = new Set<string>();
     for (const it of items) {
-      if (it.mediaId) mediaKeys.add(`${this.name}/${it.mediaId}`);
+      if (it.mediaId) mediaKeys.add(this.mediaKey(it.mediaId));
     }
 
     const map = await this.ctx.storage.list<StoredMessage>({ prefix: MSG_PREFIX });
@@ -232,7 +238,7 @@ export class ConversationServer extends Server<Env> {
     for (const [k, m] of map) {
       if (ids.has(m.id)) {
         ops.push(this.ctx.storage.delete(k));
-        if (m.media?.id) mediaKeys.add(`${this.name}/${m.media.id}`);
+        if (m.media?.id) mediaKeys.add(this.mediaKey(m.media.id));
       }
     }
     for (const key of mediaKeys) ops.push(this.env.MEDIA.delete(key));

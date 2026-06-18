@@ -28,8 +28,18 @@ function json(data: unknown, status = 200): Response {
   });
 }
 
-function randomId(): string {
-  return crypto.randomUUID().replace(/-/g, "");
+/**
+ * The id's first char encodes the storage scope: "p" = persisted (kept), "e" =
+ * ephemeral (auto-expired by the R2 lifecycle rule on the "e/" prefix). The R2
+ * key is `<scope>/<cid>/<id>`.
+ */
+function newId(persist: boolean): string {
+  return (persist ? "p" : "e") + crypto.randomUUID().replace(/-/g, "");
+}
+
+function mediaKey(cid: string, id: string): string {
+  const scope = id[0] === "p" ? "p" : "e";
+  return `${scope}/${cid}/${id}`;
 }
 
 export async function handleMedia(
@@ -59,8 +69,9 @@ export async function handleMedia(
     if (declared > MAX_UPLOAD) return json({ error: "too large" }, 413);
     const body = await request.arrayBuffer();
     if (body.byteLength > MAX_UPLOAD) return json({ error: "too large" }, 413);
-    const id = randomId();
-    await env.MEDIA.put(`${claims.conversationId}/${id}`, body);
+    const persist = url.searchParams.get("persist") === "1";
+    const id = newId(persist);
+    await env.MEDIA.put(mediaKey(claims.conversationId, id), body);
     return json({ id });
   }
 
@@ -70,7 +81,7 @@ export async function handleMedia(
     const cid = parts[1];
     const id = parts[2];
     if (cid !== claims.conversationId) return json({ error: "forbidden" }, 403);
-    const key = `${cid}/${id}`;
+    const key = mediaKey(cid, id);
 
     if (request.method === "GET") {
       const obj = await env.MEDIA.get(key);

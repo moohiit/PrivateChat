@@ -64,11 +64,16 @@ export async function compressImage(
   return { bytes: new Uint8Array(await blob.arrayBuffer()), mime, width, height };
 }
 
-/** Compress → encrypt → upload. Returns the MediaRef to attach to a message. */
+/**
+ * Compress → encrypt → upload. Returns the MediaRef to attach to a message.
+ * `persist` decides the storage scope: persisted blobs are kept; ephemeral ones
+ * are auto-expired by the R2 lifecycle rule.
+ */
 export async function uploadImage(
   conversationId: string,
   peerUserId: string,
   file: File,
+  persist: boolean,
 ): Promise<MediaRef> {
   const key = getConversationKey(conversationId);
   if (!key) throw new Error("conversation key unavailable");
@@ -79,7 +84,7 @@ export async function uploadImage(
 
   const token = await conversationTicket(peerUserId);
   const res = await fetch(
-    `${mediaBase()}/media?token=${encodeURIComponent(token)}`,
+    `${mediaBase()}/media?token=${encodeURIComponent(token)}&persist=${persist ? 1 : 0}`,
     { method: "POST", body: ciphertext as BodyInit },
   );
   if (!res.ok) throw new Error("upload failed");

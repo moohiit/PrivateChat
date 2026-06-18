@@ -70,6 +70,7 @@ export function useChat(
   const lastTypingSent = useRef(false);
   const objectUrls = useRef<Set<string>>(new Set());
   const messagesRef = useRef<ChatMessage[]>([]);
+  const persistRef = useRef(false);
 
   const key = getConversationKey(conversationId);
 
@@ -77,6 +78,11 @@ export function useChat(
   useEffect(() => {
     messagesRef.current = state.messages;
   }, [state.messages]);
+
+  // Track effective persistence so uploads pick the right storage scope.
+  useEffect(() => {
+    persistRef.current = state.persistEffective;
+  }, [state.persistEffective]);
 
   const trackUrl = useCallback((url: string) => {
     objectUrls.current.add(url);
@@ -302,7 +308,12 @@ export function useChat(
       setState((s) => ({ ...s, messages: [...s.messages, optimistic] }));
 
       try {
-        const media = await uploadImage(conversationId, peerUserId, file);
+        const media = await uploadImage(
+          conversationId,
+          peerUserId,
+          file,
+          persistRef.current,
+        );
         socketRef.current?.send(
           JSON.stringify({ type: "message:send", id, media, sentAt }),
         );
