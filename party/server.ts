@@ -119,12 +119,11 @@ export class ConversationServer extends Server<Env> {
 
     switch (msg.type) {
       case "message:send": {
-        if (
-          typeof msg.ciphertext !== "string" ||
-          msg.ciphertext.length > MAX_CIPHERTEXT ||
-          typeof msg.iv !== "string" ||
-          msg.iv.length > 256
-        ) {
+        // A message must carry text and/or an image; bound the text size.
+        const hasText = typeof msg.ciphertext === "string" && msg.ciphertext.length > 0;
+        const hasMedia = !!msg.media && typeof msg.media.id === "string";
+        if (!hasText && !hasMedia) return;
+        if (hasText && (msg.ciphertext!.length > MAX_CIPHERTEXT || typeof msg.iv !== "string")) {
           return;
         }
         this.broadcastExcept(connection.id, {
@@ -133,6 +132,7 @@ export class ConversationServer extends Server<Env> {
           from: me.userId,
           ciphertext: msg.ciphertext,
           iv: msg.iv,
+          media: msg.media,
           sentAt: msg.sentAt,
         });
         if (this.effectivePersist()) {
@@ -141,12 +141,16 @@ export class ConversationServer extends Server<Env> {
             from: me.userId,
             ciphertext: msg.ciphertext,
             iv: msg.iv,
+            media: msg.media,
             sentAt: msg.sentAt,
           };
           await this.ctx.storage.put(this.msgKey(stored), stored);
         }
         return;
       }
+      case "message:delete":
+        await this.handleDelete(msg.items);
+        return;
       case "receipt":
         this.broadcastExcept(connection.id, {
           type: "receipt",
@@ -201,8 +205,40 @@ export class ConversationServer extends Server<Env> {
   }
 
   private async clearHistory(): Promise<void> {
-    const map = await this.ctx.storage.list({ prefix: MSG_PREFIX });
-    await Promise.all([...map.keys()].map((k) => this.ctx.storage.delete(k)));
+    // Delete stored messages AND their R2 media blobs.
+    const map = await this.ctx.storage.list<StoredMessage>({ prefix: MSG_PREFIX });
+    const ops: Promise<unknown>[] = [];
+    for (const [k, m] of map) {
+      ops.push(this.ctx.storage.delete(k));
+      if (m.media?.id) ops.push(this.env.MEDIA.delete(`${this.name}/${m.media.id}`));
+    }
+    await Promise.all(ops);
+  }
+
+  /**
+   * Delete specific messages for everyone: remove R2 blobs (from the provided
+   * media ids and from any stored copies) + stored history rows, then broadcast.
+   */
+  private async handleDelete(items: { id: string; mediaId?: string }[]) {
+    if (!Array.isArray(items) || items.length === 0) return;
+    const ids = new Set(items.map((i) => i.id));
+    const mediaKeys = new Set<string>();
+    for (const it of items) {
+      if (it.mediaId) mediaKeys.add(`${this.name}/${it.mediaId}`);
+    }
+
+    const map = await this.ctx.storage.list<StoredMessage>({ prefix: MSG_PREFIX });
+    const ops: Promise<unknown>[] = [];
+    for (const [k, m] of map) {
+      if (ids.has(m.id)) {
+        ops.push(this.ctx.storage.delete(k));
+        if (m.media?.id) mediaKeys.add(`${this.name}/${m.media.id}`);
+      }
+    }
+    for (const key of mediaKeys) ops.push(this.env.MEDIA.delete(key));
+    await Promise.all(ops);
+
+    this.broadcastAll({ type: "messages:deleted", ids: [...ids] });
   }
 
   private broadcastPersistState() {

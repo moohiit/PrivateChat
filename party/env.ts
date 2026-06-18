@@ -9,4 +9,6 @@ export interface Env {
   Lobby: DurableObjectNamespace<LobbyServer>;
   /** Conversation room DO (routed from /parties/main/...). */
   Main: DurableObjectNamespace<ConversationServer>;
+  /** R2 bucket holding ENCRYPTED media blobs (ciphertext only). */
+  MEDIA: R2Bucket;
 }

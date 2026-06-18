@@ -11,6 +11,13 @@
       { "name": "Main", "class_name": "ConversationServer" }
     ]
   },
+  "r2_buckets": [
+    {
+      "binding": "MEDIA",
+      "bucket_name": "privatechat-media",
+      "preview_bucket_name": "privatechat-media"
+    }
+  ],
   "migrations": [
     {
       "tag": "v1",

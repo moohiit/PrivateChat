@@ -104,3 +104,30 @@ export async function decryptMessage(
   );
   return new TextDecoder().decode(pt);
 }
+
+/** Encrypt raw bytes (e.g. a compressed image) with the conversation key. */
+export async function encryptBytes(
+  key: CryptoKey,
+  data: Uint8Array,
+): Promise<{ ciphertext: Uint8Array; iv: string }> {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = await crypto.subtle.encrypt(
+    { name: "AES-GCM", iv },
+    key,
+    data as BufferSource,
+  );
+  return { ciphertext: new Uint8Array(ct), iv: bytesToBase64(iv) };
+}
+
+export async function decryptBytes(
+  key: CryptoKey,
+  ciphertext: Uint8Array,
+  ivBase64: string,
+): Promise<Uint8Array> {
+  const pt = await crypto.subtle.decrypt(
+    { name: "AES-GCM", iv: base64ToBytes(ivBase64) as BufferSource },
+    key,
+    ciphertext as BufferSource,
+  );
+  return new Uint8Array(pt);
+}

@@ -2,11 +2,23 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createConversationSocket } from "./party";
+import { uploadImage, downloadImage } from "./media";
 import { getConversationKey } from "@/lib/crypto/keystore";
 import { encryptMessage, decryptMessage } from "@/lib/crypto/conversation";
-import type { ChatServerMessage, ReceiptState } from "@/lib/protocol";
+import type {
+  ChatServerMessage,
+  DeleteItem,
+  MediaRef,
+  ReceiptState,
+} from "@/lib/protocol";
 
 export type MessageStatus = "sending" | "sent" | "delivered" | "read" | "failed";
+
+export type ChatImage = {
+  media?: MediaRef;
+  url: string | null; // object URL once decrypted (or local preview)
+  status: "loading" | "ready" | "error";
+};
 
 export type ChatMessage = {
   id: string;
@@ -14,6 +26,7 @@ export type ChatMessage = {
   text: string;
   sentAt: number;
   status: MessageStatus;
+  image?: ChatImage;
 };
 
 export type ChatState = {
@@ -37,12 +50,6 @@ function mergeById(existing: ChatMessage[], incoming: ChatMessage[]): ChatMessag
   return [...byId.values()].sort((a, b) => a.sentAt - b.sentAt);
 }
 
-/**
- * Drives a single conversation: opens the conversation room socket, encrypts on
- * send and decrypts on receive with the conversation key from the keystore, and
- * tracks delivery/read receipts, typing, peer room-presence, persistence state,
- * and replayed history.
- */
 export function useChat(
   conversationId: string,
   peerUserId: string,
@@ -61,8 +68,58 @@ export function useChat(
   );
   const typingTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastTypingSent = useRef(false);
+  const objectUrls = useRef<Set<string>>(new Set());
+  const messagesRef = useRef<ChatMessage[]>([]);
 
   const key = getConversationKey(conversationId);
+
+  // Keep a ref of messages for delete lookups (mediaId per message).
+  useEffect(() => {
+    messagesRef.current = state.messages;
+  }, [state.messages]);
+
+  const trackUrl = useCallback((url: string) => {
+    objectUrls.current.add(url);
+    return url;
+  }, []);
+
+  const revokeFor = useCallback((msgs: ChatMessage[]) => {
+    for (const m of msgs) {
+      if (m.image?.url) {
+        URL.revokeObjectURL(m.image.url);
+        objectUrls.current.delete(m.image.url);
+      }
+    }
+  }, []);
+
+  // Download + decrypt an image and attach its object URL to the message.
+  const hydrateImage = useCallback(
+    async (messageId: string, media: MediaRef) => {
+      try {
+        const url = trackUrl(
+          await downloadImage(conversationId, peerUserId, media),
+        );
+        setState((s) => ({
+          ...s,
+          messages: s.messages.map((m) =>
+            m.id === messageId && m.image
+              ? { ...m, image: { ...m.image, url, status: "ready" } }
+              : m,
+          ),
+        }));
+      } catch {
+        setState((s) => ({
+          ...s,
+          messages: s.messages.map((m) =>
+            m.id === messageId && m.image
+              ? { ...m, image: { ...m.image, status: "error" } }
+              : m,
+          ),
+        }));
+      }
+    },
+    [conversationId, peerUserId, trackUrl],
+  );
 
   useEffect(() => {
     const socket = createConversationSocket(conversationId, peerUserId);
@@ -81,15 +138,16 @@ export function useChat(
 
       switch (msg.type) {
         case "message:relay": {
-          if (!aesKey) return;
-          let text: string;
-          try {
-            text = await decryptMessage(aesKey, {
-              ciphertext: msg.ciphertext,
-              iv: msg.iv,
-            });
-          } catch {
-            text = "⚠️ could not decrypt message";
+          let text = "";
+          if (aesKey && msg.ciphertext && msg.iv) {
+            try {
+              text = await decryptMessage(aesKey, {
+                ciphertext: msg.ciphertext,
+                iv: msg.iv,
+              });
+            } catch {
+              text = "⚠️ could not decrypt message";
+            }
           }
           setState((s) => {
             if (s.messages.some((m) => m.id === msg.id)) return s;
@@ -99,6 +157,9 @@ export function useChat(
               text,
               sentAt: msg.sentAt,
               status: "read",
+              image: msg.media
+                ? { media: msg.media, url: null, status: "loading" }
+                : undefined,
             };
             return {
               ...s,
@@ -107,7 +168,7 @@ export function useChat(
               ),
             };
           });
-          // Chat is open => acknowledge delivered + read.
+          if (msg.media) void hydrateImage(msg.id, msg.media);
           send({ type: "receipt", id: msg.id, state: "delivered" });
           send({ type: "receipt", id: msg.id, state: "read" });
           return;
@@ -136,18 +197,27 @@ export function useChat(
             persistEffective: msg.effective,
           }));
           return;
+        case "messages:deleted": {
+          const ids = new Set(msg.ids);
+          setState((s) => {
+            revokeFor(s.messages.filter((m) => ids.has(m.id)));
+            return { ...s, messages: s.messages.filter((m) => !ids.has(m.id)) };
+          });
+          return;
+        }
         case "history": {
-          if (!aesKey) return;
           const decrypted: ChatMessage[] = [];
           for (const m of msg.messages) {
-            let text: string;
-            try {
-              text = await decryptMessage(aesKey, {
-                ciphertext: m.ciphertext,
-                iv: m.iv,
-              });
-            } catch {
-              text = "⚠️ could not decrypt message";
+            let text = "";
+            if (aesKey && m.ciphertext && m.iv) {
+              try {
+                text = await decryptMessage(aesKey, {
+                  ciphertext: m.ciphertext,
+                  iv: m.iv,
+                });
+              } catch {
+                text = "⚠️ could not decrypt message";
+              }
             }
             decrypted.push({
               id: m.id,
@@ -155,23 +225,36 @@ export function useChat(
               text,
               sentAt: m.sentAt,
               status: "read",
+              image: m.media
+                ? { media: m.media, url: null, status: "loading" }
+                : undefined,
             });
           }
           setState((s) => ({ ...s, messages: mergeById(s.messages, decrypted) }));
+          for (const m of msg.messages) {
+            if (m.media) void hydrateImage(m.id, m.media);
+          }
           return;
         }
         case "history:cleared":
-          setState((s) => ({ ...s, messages: [] }));
+          setState((s) => {
+            revokeFor(s.messages);
+            return { ...s, messages: [] };
+          });
           return;
       }
     };
 
     socket.addEventListener("message", onMessage);
+    const urls = objectUrls.current;
     return () => {
       socket.removeEventListener("message", onMessage);
       socket.close();
       socketRef.current = null;
+      for (const url of urls) URL.revokeObjectURL(url);
+      urls.clear();
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [conversationId, peerUserId]);
 
   const sendText = useCallback(
@@ -180,7 +263,6 @@ export function useChat(
       if (!trimmed) return;
       const id = randomId();
       const sentAt = Date.now();
-
       const optimistic: ChatMessage = {
         id,
         mine: true,
@@ -196,23 +278,67 @@ export function useChat(
         socketRef.current?.send(
           JSON.stringify({ type: "message:send", id, ciphertext, iv, sentAt }),
         );
-        setState((s) => ({
-          ...s,
-          messages: s.messages.map((m) =>
-            m.id === id ? { ...m, status: "sent" as const } : m,
-          ),
-        }));
+        markStatus(setState, id, "sent");
       } catch {
-        setState((s) => ({
-          ...s,
-          messages: s.messages.map((m) =>
-            m.id === id ? { ...m, status: "failed" as const } : m,
-          ),
-        }));
+        markStatus(setState, id, "failed");
       }
     },
     [key],
   );
+
+  const sendImage = useCallback(
+    async (file: File) => {
+      const id = randomId();
+      const sentAt = Date.now();
+      const localUrl = trackUrl(URL.createObjectURL(file));
+      const optimistic: ChatMessage = {
+        id,
+        mine: true,
+        text: "",
+        sentAt,
+        status: "sending",
+        image: { url: localUrl, status: "ready" },
+      };
+      setState((s) => ({ ...s, messages: [...s.messages, optimistic] }));
+
+      try {
+        const media = await uploadImage(conversationId, peerUserId, file);
+        socketRef.current?.send(
+          JSON.stringify({ type: "message:send", id, media, sentAt }),
+        );
+        setState((s) => ({
+          ...s,
+          messages: s.messages.map((m) =>
+            m.id === id
+              ? {
+                  ...m,
+                  status: "sent",
+                  image: m.image ? { ...m.image, media } : m.image,
+                }
+              : m,
+          ),
+        }));
+      } catch {
+        markStatus(setState, id, "failed");
+      }
+    },
+    [conversationId, peerUserId, trackUrl],
+  );
+
+  const deleteMessages = useCallback((ids: string[]) => {
+    if (ids.length === 0) return;
+    const idSet = new Set(ids);
+    const items: DeleteItem[] = ids.map((id) => {
+      const m = messagesRef.current.find((x) => x.id === id);
+      return { id, mediaId: m?.image?.media?.id };
+    });
+    socketRef.current?.send(JSON.stringify({ type: "message:delete", items }));
+    // Optimistic local removal (server also broadcasts messages:deleted).
+    setState((s) => {
+      revokeFor(s.messages.filter((m) => idSet.has(m.id)));
+      return { ...s, messages: s.messages.filter((m) => !idSet.has(m.id)) };
+    });
+  }, [revokeFor]);
 
   const setTyping = useCallback((on: boolean) => {
     const socket = socketRef.current;
@@ -242,14 +368,26 @@ export function useChat(
     ...state,
     keyReady: key !== null,
     sendText,
+    sendImage,
+    deleteMessages,
     setTyping,
     setPersist,
     clearHistory,
   };
 }
 
+function markStatus(
+  setState: React.Dispatch<React.SetStateAction<ChatState>>,
+  id: string,
+  status: MessageStatus,
+) {
+  setState((s) => ({
+    ...s,
+    messages: s.messages.map((m) => (m.id === id ? { ...m, status } : m)),
+  }));
+}
+
 function rankUp(current: MessageStatus, next: ReceiptState): boolean {
-  const cur =
-    current === "read" ? 2 : current === "delivered" ? 1 : 0;
+  const cur = current === "read" ? 2 : current === "delivered" ? 1 : 0;
   return RANK[next] > cur;
 }

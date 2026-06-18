@@ -1,5 +1,6 @@
 import { routePartykitRequest } from "partyserver";
 import { verifyConnectToken, verifyConversationTicket } from "./auth";
+import { handleMedia } from "./media";
 import type { Env } from "./env";
 
 // Durable Object classes must be exported from the Worker entry so Wrangler can
@@ -9,6 +10,10 @@ export { ConversationServer } from "./server";
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
+    // Encrypted media (R2) endpoints — handled before realtime routing.
+    const media = await handleMedia(request, env);
+    if (media) return media;
+
     const response = await routePartykitRequest(request, env as never, {
       // Reject bad tokens BEFORE the WebSocket upgrade. On success we return
       // nothing (let the upgrade proceed); the DO re-verifies the token in

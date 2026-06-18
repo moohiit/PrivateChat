@@ -1,7 +1,12 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { useChat, type MessageStatus } from "@/lib/client/useChat";
+import {
+  useChat,
+  type ChatMessage,
+  type MessageStatus,
+} from "@/lib/client/useChat";
+import { MAX_IMAGE_BYTES } from "@/lib/client/media";
 import type { Conversation } from "@/lib/protocol";
 
 export default function ChatView({
@@ -22,13 +27,19 @@ export default function ChatView({
     persistMine,
     persistEffective,
     sendText,
+    sendImage,
+    deleteMessages,
     setTyping,
     setPersist,
     clearHistory,
   } = useChat(conversationId, peer.userId, selfUserId);
 
   const [draft, setDraft] = useState("");
+  const [selecting, setSelecting] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [error, setError] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
@@ -42,34 +53,96 @@ export default function ChatView({
     setTyping(false);
   }
 
+  function onPickFiles(e: React.ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(e.target.files ?? []);
+    e.target.value = "";
+    for (const f of files) {
+      if (!f.type.startsWith("image/")) continue;
+      if (f.size > MAX_IMAGE_BYTES) {
+        setError("Image is too large (max 25 MB).");
+        continue;
+      }
+      void sendImage(f);
+    }
+  }
+
+  function toggleSelect(id: string) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function exitSelect() {
+    setSelecting(false);
+    setSelected(new Set());
+  }
+
+  function confirmDelete() {
+    if (selected.size === 0) return exitSelect();
+    if (confirm(`Delete ${selected.size} message(s) for everyone?`)) {
+      deleteMessages([...selected]);
+      exitSelect();
+    }
+  }
+
   return (
     <div className="surface flex h-[calc(100dvh-7.5rem)] min-h-[24rem] flex-col overflow-hidden p-0 sm:h-[calc(100dvh-9rem)]">
       {/* Header */}
       <header className="flex items-center gap-3 border-b border-border-soft px-4 py-3">
-        <button
-          onClick={onBack}
-          aria-label="Back"
-          className="btn-ghost grid h-8 w-8 place-items-center rounded-lg text-sm"
-        >
-          ←
-        </button>
-        <div className="min-w-0 flex-1">
-          <p className="identifier truncate text-sm font-medium">
-            @{peer.username}
-          </p>
-          <p className="text-xs text-faint">
-            {peerTyping ? (
-              <span className="text-accent">typing…</span>
-            ) : peerOnline ? (
-              "online"
-            ) : (
-              "offline"
-            )}
-          </p>
-        </div>
-        <span className="identifier hidden text-[0.65rem] text-faint sm:block">
-          {conversationId.slice(0, 8)}…
-        </span>
+        {selecting ? (
+          <>
+            <button
+              onClick={exitSelect}
+              className="btn-ghost rounded-lg px-3 py-1.5 text-xs"
+            >
+              Cancel
+            </button>
+            <span className="flex-1 text-sm text-muted">
+              {selected.size} selected
+            </span>
+            <button
+              onClick={confirmDelete}
+              disabled={selected.size === 0}
+              className="rounded-lg bg-danger/15 px-3 py-1.5 text-xs font-semibold text-danger disabled:opacity-40"
+            >
+              Delete
+            </button>
+          </>
+        ) : (
+          <>
+            <button
+              onClick={onBack}
+              aria-label="Back"
+              className="btn-ghost grid h-8 w-8 place-items-center rounded-lg text-sm"
+            >
+              ←
+            </button>
+            <div className="min-w-0 flex-1">
+              <p className="identifier truncate text-sm font-medium">
+                @{peer.username}
+              </p>
+              <p className="text-xs text-faint">
+                {peerTyping ? (
+                  <span className="text-accent">typing…</span>
+                ) : peerOnline ? (
+                  "online"
+                ) : (
+                  "offline"
+                )}
+              </p>
+            </div>
+            <button
+              onClick={() => setSelecting(true)}
+              disabled={messages.length === 0}
+              className="btn-ghost rounded-lg px-3 py-1.5 text-xs disabled:opacity-40"
+            >
+              Select
+            </button>
+          </>
+        )}
       </header>
 
       {/* Persistence controls */}
@@ -78,7 +151,7 @@ export default function ChatView({
           onClick={() => setPersist(!persistMine)}
           disabled={!keyReady}
           className="flex items-center gap-2 text-xs disabled:opacity-50"
-          title="Both people must enable saving for history to persist"
+          title="Both people must enable saving for history (and photos) to persist"
         >
           <span
             className={`relative inline-flex h-4 w-7 items-center rounded-full transition-colors ${
@@ -113,6 +186,15 @@ export default function ChatView({
         </button>
       </div>
 
+      {error && (
+        <button
+          onClick={() => setError(null)}
+          className="border-b border-warn/30 bg-warn/10 px-4 py-1.5 text-left text-xs text-warn"
+        >
+          {error} — dismiss
+        </button>
+      )}
+
       {/* Messages */}
       <div
         ref={scrollRef}
@@ -130,16 +212,17 @@ export default function ChatView({
         {keyReady && messages.length === 0 && (
           <Banner>
             This is the start of your encrypted conversation with @
-            {peer.username}. Messages are end-to-end encrypted.
+            {peer.username}. Messages and photos are end-to-end encrypted.
           </Banner>
         )}
         {messages.map((m) => (
           <Bubble
             key={m.id}
-            mine={m.mine}
-            text={m.text}
-            sentAt={m.sentAt}
-            status={m.status}
+            m={m}
+            selecting={selecting}
+            selected={selected.has(m.id)}
+            onToggle={() => toggleSelect(m.id)}
+            peerUsername={peer.username}
           />
         ))}
         {peerTyping && (
@@ -156,6 +239,23 @@ export default function ChatView({
         onSubmit={submit}
         className="flex items-end gap-2 border-t border-border-soft px-3 py-3"
       >
+        <input
+          ref={fileRef}
+          type="file"
+          accept="image/*"
+          multiple
+          onChange={onPickFiles}
+          className="hidden"
+        />
+        <button
+          type="button"
+          onClick={() => fileRef.current?.click()}
+          disabled={!keyReady}
+          aria-label="Attach photo"
+          className="btn-ghost grid h-10 w-10 shrink-0 place-items-center rounded-[0.625rem] text-base disabled:opacity-50"
+        >
+          🖼
+        </button>
         <input
           value={draft}
           onChange={(e) => {
@@ -182,35 +282,116 @@ export default function ChatView({
 }
 
 function Bubble({
-  mine,
-  text,
-  sentAt,
-  status,
+  m,
+  selecting,
+  selected,
+  onToggle,
+  peerUsername,
 }: {
-  mine: boolean;
-  text: string;
-  sentAt: number;
-  status: MessageStatus;
+  m: ChatMessage;
+  selecting: boolean;
+  selected: boolean;
+  onToggle: () => void;
+  peerUsername: string;
 }) {
+  function download() {
+    if (!m.image?.url) return;
+    const ext = (m.image.media?.mime ?? "image/webp").split("/")[1] ?? "webp";
+    const a = document.createElement("a");
+    a.href = m.image.url;
+    a.download = `privatechat-${m.id.slice(0, 8)}.${ext}`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }
+
   return (
-    <div className={`flex ${mine ? "justify-end" : "justify-start"}`}>
-      <div
-        className={`max-w-[82%] rounded-2xl px-3 py-2 text-sm leading-relaxed sm:max-w-[70%] ${
-          mine
-            ? "rounded-br-sm bg-accent text-accent-ink"
-            : "rounded-bl-sm bg-surface-strong text-foreground"
-        }`}
-      >
-        <p className="whitespace-pre-wrap break-words">{text}</p>
-        <span
-          className={`mt-1 flex items-center justify-end gap-1 text-[0.65rem] ${
-            mine ? "text-accent-ink/70" : "text-faint"
-          }`}
+    <div
+      className={`flex ${m.mine ? "justify-end" : "justify-start"} ${
+        selecting ? "cursor-pointer" : ""
+      }`}
+      onClick={selecting ? onToggle : undefined}
+    >
+      <div className="flex items-end gap-2">
+        {selecting && (
+          <span
+            aria-hidden
+            className={`mb-2 grid h-4 w-4 shrink-0 place-items-center rounded-full border text-[0.6rem] ${
+              selected
+                ? "border-accent bg-accent text-accent-ink"
+                : "border-border-strong"
+            }`}
+          >
+            {selected ? "✓" : ""}
+          </span>
+        )}
+        <div
+          className={`max-w-[82%] overflow-hidden rounded-2xl text-sm leading-relaxed sm:max-w-[70%] ${
+            m.mine
+              ? "rounded-br-sm bg-accent text-accent-ink"
+              : "rounded-bl-sm bg-surface-strong text-foreground"
+          } ${selected ? "ring-2 ring-accent" : ""}`}
         >
-          {formatTime(sentAt)}
-          {mine && <StatusTick status={status} />}
-        </span>
+          {m.image && <ImageBlock image={m.image} alt={`Photo from @${peerUsername}`} onDownload={download} />}
+          {m.text && (
+            <p className="whitespace-pre-wrap break-words px-3 py-2">{m.text}</p>
+          )}
+          <span
+            className={`flex items-center justify-end gap-1 px-3 pb-1.5 text-[0.65rem] ${
+              m.text || !m.image ? "" : "pt-1.5"
+            } ${m.mine ? "text-accent-ink/70" : "text-faint"}`}
+          >
+            {formatTime(m.sentAt)}
+            {m.mine && <StatusTick status={m.status} />}
+          </span>
+        </div>
       </div>
+    </div>
+  );
+}
+
+function ImageBlock({
+  image,
+  alt,
+  onDownload,
+}: {
+  image: NonNullable<ChatMessage["image"]>;
+  alt: string;
+  onDownload: () => void;
+}) {
+  if (image.status === "loading" && !image.url) {
+    return (
+      <div className="grid h-40 w-56 place-items-center bg-black/30 text-xs text-faint">
+        decrypting…
+      </div>
+    );
+  }
+  if (image.status === "error") {
+    return (
+      <div className="grid h-40 w-56 place-items-center bg-black/30 text-xs text-danger">
+        couldn&apos;t load image
+      </div>
+    );
+  }
+  return (
+    <div className="relative">
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src={image.url ?? ""}
+        alt={alt}
+        className="block max-h-72 w-full object-cover"
+      />
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          onDownload();
+        }}
+        aria-label="Download photo"
+        className="absolute right-2 top-2 grid h-7 w-7 place-items-center rounded-full bg-black/55 text-xs text-white backdrop-blur hover:bg-black/75"
+      >
+        ↓
+      </button>
     </div>
   );
 }
