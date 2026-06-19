@@ -307,39 +307,45 @@ function Bubble({
 
   return (
     <div
-      className={`flex ${m.mine ? "justify-end" : "justify-start"} ${
+      className={`flex items-end gap-2 ${m.mine ? "justify-end" : "justify-start"} ${
         selecting ? "cursor-pointer" : ""
       }`}
       onClick={selecting ? onToggle : undefined}
     >
-      <div className="flex items-end gap-2">
-        {selecting && (
-          <span
-            aria-hidden
-            className={`mb-2 grid h-4 w-4 shrink-0 place-items-center rounded-full border text-[0.6rem] ${
-              selected
-                ? "border-accent bg-accent text-accent-ink"
-                : "border-border-strong"
-            }`}
-          >
-            {selected ? "✓" : ""}
-          </span>
-        )}
-        <div
-          className={`max-w-[82%] overflow-hidden rounded-2xl text-sm leading-relaxed sm:max-w-[70%] ${
-            m.mine
-              ? "rounded-br-sm bg-accent text-accent-ink"
-              : "rounded-bl-sm bg-surface-strong text-foreground"
-          } ${selected ? "ring-2 ring-accent" : ""}`}
+      {selecting && (
+        <span
+          aria-hidden
+          className={`mb-2 grid h-4 w-4 shrink-0 place-items-center rounded-full border text-[0.6rem] ${
+            selected
+              ? "border-accent bg-accent text-accent-ink"
+              : "border-border-strong"
+          }`}
         >
-          {m.image && <ImageBlock image={m.image} alt={`Photo from @${peerUsername}`} onDownload={download} />}
+          {selected ? "✓" : ""}
+        </span>
+      )}
+      <div
+        className={`w-fit max-w-[80%] min-w-0 overflow-hidden rounded-2xl text-sm leading-relaxed sm:max-w-[68%] ${
+          m.mine
+            ? "rounded-br-sm bg-accent text-accent-ink"
+            : "rounded-bl-sm bg-surface-strong text-foreground"
+        } ${selected ? "ring-2 ring-accent" : ""}`}
+      >
+        {m.image && (
+          <ImageBlock
+            image={m.image}
+            alt={`Photo from @${peerUsername}`}
+            onDownload={download}
+          />
+        )}
+        <div className={`px-3 ${m.image && !m.text ? "py-1.5" : "py-2"}`}>
           {m.text && (
-            <p className="whitespace-pre-wrap break-words px-3 py-2">{m.text}</p>
+            <p className="whitespace-pre-wrap break-words">{m.text}</p>
           )}
           <span
-            className={`flex items-center justify-end gap-1 px-3 pb-1.5 text-[0.65rem] ${
-              m.text || !m.image ? "" : "pt-1.5"
-            } ${m.mine ? "text-accent-ink/70" : "text-faint"}`}
+            className={`mt-0.5 flex items-center justify-end gap-1 text-[0.65rem] ${
+              m.mine ? "text-accent-ink/70" : "text-faint"
+            }`}
           >
             {formatTime(m.sentAt)}
             {m.mine && <StatusTick status={m.status} />}
