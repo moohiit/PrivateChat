@@ -159,7 +159,7 @@ remains end-to-end encrypted and unreadable by any server.
 - [x] Verified: presence-check (visibility transitions), handshake-check (contacts see
       each other online while both hidden; hidden contact in reconnect snapshot).
 
-### Phase 8 — Hardening & deploy ✅ (code) / 📋 (deploy = your accounts)
+### Phase 8 — Hardening & deploy ✅
 - [x] Best-effort rate-limit on signup/login; all input Zod-validated.
 - [x] Security headers (CSP scoped to self + PartyKit, X-Frame DENY, nosniff,
       Referrer-Policy, Permissions-Policy, HSTS in prod) via next.config.
@@ -172,14 +172,68 @@ remains end-to-end encrypted and unreadable by any server.
 - [x] Verified live: headers present, cross-origin POST → 403, rate limit → 429;
       all realtime/crypto scripts still pass.
 
+### Realtime migration: PartyKit → PartyServer (Cloudflare) ✅
+- [x] Migrated `party/` from PartyKit to **PartyServer + Wrangler** (deploy to the user's
+      own Cloudflare account) — the shared `partykit.dev` domain hit Cloudflare's
+      10k-custom-domain limit. Same Durable Object logic, same protocol/paths.
+- [x] `wrangler.jsonc` with `new_sqlite_classes` (free-plan DOs); `onBeforeConnect` token
+      auth; local dev via `wrangler dev` on :8787.
+
+### Phase 9 — Encrypted media + message deletion ✅
+- [x] **Photo sharing, zero-knowledge:** compress (canvas/WebP) + AES-GCM encrypt in the
+      browser with the conversation key; only ciphertext goes to **R2** via Worker
+      `/media` routes (ticket-auth, cid-scoped). Recipient downloads → decrypts → can save.
+- [x] Image messages carry a `MediaRef`; persisted with history when both enable saving.
+- [x] **Delete for everyone** (single/multi-select): removes both clients' copies, stored
+      history rows, AND the R2 blob. Clear-history also purges blobs.
+- [x] **Ephemeral-photo cleanup:** scope-keyed blobs (`p/`=kept, `e/`=ephemeral) + R2
+      lifecycle rule expiring `e/` after 30 days — without breaking saved photos.
+- [x] Verified via `scripts/media-check.ts` (upload, cid-scoped auth, decrypt-match,
+      relay, delete-removes-blob) + prod smoke against the live Worker.
+
+### 🚀 Deployment status: LIVE
+- [x] **Cloudflare Worker** (realtime + R2 media): `privatechat-party.<sub>.workers.dev`.
+- [x] **R2** bucket `privatechat-media` + `ephemeral-30d` lifecycle rule.
+- [x] **Turso** remote DB migrated (`users`, `key_backups`).
+- [x] **Vercel** app live; 4 env vars wired (`TURSO_*`, `JWT_SECRET`, `NEXT_PUBLIC_PARTYKIT_HOST`).
+- [x] Repo on GitHub; `JWT_SECRET` shared between Vercel + the Worker.
+
 ---
 
-## 4. Stretch Goals
-- Double Ratchet (Signal-style) for forward secrecy + post-compromise security.
-- Group chats (sender-key model) — natural fit for a multi-member DO room.
-- Disappearing messages (TTL) and ephemeral screenshot-resistant mode.
-- Multi-device key sync via an encrypted key backup.
-- Encrypted file/media attachments.
+## 4. Future Features Backlog
+
+Tiered by effort. ⚠️ = touches the zero-knowledge model — only do with a client-side
+workaround so the server never sees plaintext.
+
+### 🟢 Quick wins (hours)
+- [ ] Unread badges + last-message preview in the conversation list (the deferred Phase 7 item).
+- [ ] Emoji **reactions** to messages (small protocol add; reuses relay).
+- [ ] **Reply / quote** a message.
+- [ ] **Disappearing messages** — per-conversation TTL (reuse delete + R2-expiry machinery).
+- [ ] **Safety-number change alert** — warn + re-verify if a peer's public key changes (anti key-swap).
+- [ ] Light/dark theme toggle; empty-state & loading polish.
+
+### 🟡 Messaging power features (~a day each)
+- [ ] **Voice messages** — record audio → existing compress→encrypt→R2 pipeline (new media kind).
+- [ ] **Any-file sharing** (PDFs/docs) — generalize `MediaRef` beyond images.
+- [ ] **Message search** — client-side over decrypted history (stays E2E).
+- [ ] **Edit messages** + "edited" marker.
+- [ ] **Profile**: display name + avatar (public or encrypted blob).
+- [ ] ⚠️ Link previews — only via client-side fetch/oembed, never server-side.
+
+### 🔵 Bigger swings (multi-day, high impact)
+- [ ] **Voice & video calls (WebRTC)** — P2P-encrypted media; lobby/room used for signaling.
+- [ ] **Group chats** — sender-key model in a multi-member Durable Object room.
+- [ ] **Forward secrecy (Double Ratchet)** — per-message ratcheting keys (Signal-grade).
+- [ ] ⚠️ **Push notifications (Web Push)** + installable **PWA** — notify "new message" without content.
+
+### 🟣 Production hardening
+- [ ] Distributed **rate limiting** via Upstash Redis (current limiter is per-instance).
+- [ ] **Account & device management**: revoke sessions, "log out everywhere", delete account
+      (wipes Turso rows + R2 objects).
+- [ ] **Block / report** a user.
+- [ ] **Tests + CI**: promote `scripts/*-check.ts` to a CI gate; unit tests for crypto utils.
+- [ ] **Error tracking / observability** (Sentry; Worker `observability` already enabled).
 
 ## 5. Key Risks & Notes
 - **Two deploy targets:** Next.js on Vercel + PartyKit on Cloudflare. Wire the PartyKit
