@@ -28,6 +28,8 @@ export type ChatMessage = {
   status: MessageStatus;
   image?: ChatImage;
   expiresAt?: number;
+  replyTo?: string;
+  reactions: Record<string, string>; // userId -> emoji
 };
 
 export type ChatState = {
@@ -207,6 +209,8 @@ export function useChat(
               sentAt: msg.sentAt,
               status: "read",
               expiresAt: msg.expiresAt,
+              replyTo: msg.replyTo,
+              reactions: {},
               image: msg.media
                 ? { media: msg.media, url: null, status: "loading" }
                 : undefined,
@@ -252,6 +256,18 @@ export function useChat(
           disappearRef.current = msg.ttl;
           setState((s) => ({ ...s, disappearTtl: msg.ttl }));
           return;
+        case "reaction":
+          setState((s) => ({
+            ...s,
+            messages: s.messages.map((m) => {
+              if (m.id !== msg.id) return m;
+              const reactions = { ...m.reactions };
+              if (msg.op === "remove") delete reactions[msg.from];
+              else reactions[msg.from] = msg.emoji;
+              return { ...m, reactions };
+            }),
+          }));
+          return;
         case "messages:deleted":
           removeMessages(msg.ids);
           return;
@@ -276,6 +292,8 @@ export function useChat(
               sentAt: m.sentAt,
               status: "read",
               expiresAt: m.expiresAt,
+              replyTo: m.replyTo,
+              reactions: m.reactions ?? {},
               image: m.media
                 ? { media: m.media, url: null, status: "loading" }
                 : undefined,
@@ -313,7 +331,7 @@ export function useChat(
   }, [conversationId, peerUserId]);
 
   const sendText = useCallback(
-    async (text: string) => {
+    async (text: string, replyTo?: string) => {
       const trimmed = text.trim();
       if (!trimmed) return;
       const id = randomId();
@@ -327,6 +345,8 @@ export function useChat(
         sentAt,
         status: "sending",
         expiresAt,
+        replyTo,
+        reactions: {},
       };
       setState((s) => ({ ...s, messages: [...s.messages, optimistic] }));
       scheduleLocalExpiry(id, expiresAt);
@@ -335,7 +355,14 @@ export function useChat(
         if (!key) throw new Error("no key");
         const { ciphertext, iv } = await encryptMessage(key, trimmed);
         socketRef.current?.send(
-          JSON.stringify({ type: "message:send", id, ciphertext, iv, sentAt }),
+          JSON.stringify({
+            type: "message:send",
+            id,
+            ciphertext,
+            iv,
+            sentAt,
+            replyTo,
+          }),
         );
         markStatus(setState, id, "sent");
       } catch {
@@ -346,7 +373,7 @@ export function useChat(
   );
 
   const sendImage = useCallback(
-    async (file: File) => {
+    async (file: File, replyTo?: string) => {
       const id = randomId();
       const sentAt = Date.now();
       const expiresAt =
@@ -359,6 +386,8 @@ export function useChat(
         sentAt,
         status: "sending",
         expiresAt,
+        replyTo,
+        reactions: {},
         image: { url: localUrl, status: "ready" },
       };
       setState((s) => ({ ...s, messages: [...s.messages, optimistic] }));
@@ -372,7 +401,7 @@ export function useChat(
           persistRef.current,
         );
         socketRef.current?.send(
-          JSON.stringify({ type: "message:send", id, media, sentAt }),
+          JSON.stringify({ type: "message:send", id, media, sentAt, replyTo }),
         );
         setState((s) => ({
           ...s,
@@ -435,12 +464,36 @@ export function useChat(
     socketRef.current?.send(JSON.stringify({ type: "disappear:set", ttl }));
   }, []);
 
+  // Toggle my reaction on a message (same emoji again removes it).
+  const react = useCallback(
+    (messageId: string, emoji: string) => {
+      const m = messagesRef.current.find((x) => x.id === messageId);
+      const op = m?.reactions[selfUserId] === emoji ? "remove" : "add";
+      socketRef.current?.send(
+        JSON.stringify({ type: "reaction", id: messageId, emoji, op }),
+      );
+      setState((s) => ({
+        ...s,
+        messages: s.messages.map((x) => {
+          if (x.id !== messageId) return x;
+          const reactions = { ...x.reactions };
+          if (op === "remove") delete reactions[selfUserId];
+          else reactions[selfUserId] = emoji;
+          return { ...x, reactions };
+        }),
+      }));
+    },
+    [selfUserId],
+  );
+
   return {
     ...state,
+    selfUserId,
     keyReady: key !== null,
     sendText,
     sendImage,
     deleteMessages,
+    react,
     setTyping,
     setPersist,
     setDisappear,

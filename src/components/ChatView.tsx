@@ -16,6 +16,8 @@ const DISAPPEAR_OPTIONS = [
   { ttl: 604_800_000, label: "7d" },
 ];
 
+const REACTIONS = ["👍", "❤️", "😂", "😮", "😢", "🙏"];
+
 export default function ChatView({
   conversation,
   selfUserId,
@@ -37,6 +39,7 @@ export default function ChatView({
     sendText,
     sendImage,
     deleteMessages,
+    react,
     setTyping,
     setPersist,
     setDisappear,
@@ -46,9 +49,12 @@ export default function ChatView({
   const [draft, setDraft] = useState("");
   const [selecting, setSelecting] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [replyTo, setReplyTo] = useState<ChatMessage | null>(null);
   const [error, setError] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+
+  const byId = new Map(messages.map((m) => [m.id, m]));
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
@@ -57,22 +63,37 @@ export default function ChatView({
   function submit(e: React.FormEvent) {
     e.preventDefault();
     if (!draft.trim()) return;
-    void sendText(draft);
+    void sendText(draft, replyTo?.id);
     setDraft("");
+    setReplyTo(null);
     setTyping(false);
   }
 
   function onPickFiles(e: React.ChangeEvent<HTMLInputElement>) {
     const files = Array.from(e.target.files ?? []);
     e.target.value = "";
+    const rid = replyTo?.id;
+    let used = false;
     for (const f of files) {
       if (!f.type.startsWith("image/")) continue;
       if (f.size > MAX_IMAGE_BYTES) {
         setError("Image is too large (max 25 MB).");
         continue;
       }
-      void sendImage(f);
+      void sendImage(f, used ? undefined : rid);
+      used = true;
     }
+    if (used) setReplyTo(null);
+  }
+
+  function quotedFor(m: ChatMessage): { mine: boolean; text: string } | null {
+    if (!m.replyTo) return null;
+    const q = byId.get(m.replyTo);
+    if (!q) return { mine: false, text: "original message" };
+    return {
+      mine: q.mine,
+      text: q.text || (q.image ? "📷 Photo" : "message"),
+    };
   }
 
   function toggleSelect(id: string) {
@@ -257,6 +278,10 @@ export default function ChatView({
             selected={selected.has(m.id)}
             onToggle={() => toggleSelect(m.id)}
             peerUsername={peer.username}
+            selfUserId={selfUserId}
+            quoted={quotedFor(m)}
+            onReply={() => setReplyTo(m)}
+            onReact={(emoji) => react(m.id, emoji)}
           />
         ))}
         {peerTyping && (
@@ -267,6 +292,28 @@ export default function ChatView({
           </div>
         )}
       </div>
+
+      {/* Reply context */}
+      {replyTo && (
+        <div className="flex items-center gap-2 border-t border-border-soft bg-surface-strong px-4 py-2">
+          <span className="h-8 w-0.5 shrink-0 rounded bg-accent" aria-hidden />
+          <div className="min-w-0 flex-1">
+            <p className="text-[0.65rem] text-accent">
+              Replying to {replyTo.mine ? "yourself" : `@${peer.username}`}
+            </p>
+            <p className="truncate text-xs text-faint">
+              {replyTo.text || (replyTo.image ? "📷 Photo" : "message")}
+            </p>
+          </div>
+          <button
+            onClick={() => setReplyTo(null)}
+            aria-label="Cancel reply"
+            className="btn-ghost grid h-7 w-7 place-items-center rounded-lg text-xs"
+          >
+            ✕
+          </button>
+        </div>
+      )}
 
       {/* Composer */}
       <form
@@ -321,13 +368,23 @@ function Bubble({
   selected,
   onToggle,
   peerUsername,
+  selfUserId,
+  quoted,
+  onReply,
+  onReact,
 }: {
   m: ChatMessage;
   selecting: boolean;
   selected: boolean;
   onToggle: () => void;
   peerUsername: string;
+  selfUserId: string;
+  quoted: { mine: boolean; text: string } | null;
+  onReply: () => void;
+  onReact: (emoji: string) => void;
 }) {
+  const [menu, setMenu] = useState(false);
+
   function download() {
     if (!m.image?.url) return;
     const ext = (m.image.media?.mime ?? "image/webp").split("/")[1] ?? "webp";
@@ -339,32 +396,31 @@ function Bubble({
     a.remove();
   }
 
-  return (
+  const counts: Record<string, number> = {};
+  for (const e of Object.values(m.reactions)) counts[e] = (counts[e] ?? 0) + 1;
+  const myReaction = m.reactions[selfUserId];
+
+  const bubbleCol = (
     <div
-      className={`flex items-end gap-2 ${m.mine ? "justify-end" : "justify-start"} ${
-        selecting ? "cursor-pointer" : ""
+      className={`flex max-w-[80%] flex-col gap-1 sm:max-w-[68%] ${
+        m.mine ? "items-end" : "items-start"
       }`}
-      onClick={selecting ? onToggle : undefined}
     >
-      {selecting && (
-        <span
-          aria-hidden
-          className={`mb-2 grid h-4 w-4 shrink-0 place-items-center rounded-full border text-[0.6rem] ${
-            selected
-              ? "border-accent bg-accent text-accent-ink"
-              : "border-border-strong"
-          }`}
-        >
-          {selected ? "✓" : ""}
-        </span>
-      )}
       <div
-        className={`w-fit max-w-[80%] min-w-0 overflow-hidden rounded-2xl text-sm leading-relaxed sm:max-w-[68%] ${
+        className={`w-fit min-w-0 overflow-hidden rounded-2xl text-sm leading-relaxed ${
           m.mine
             ? "rounded-br-sm bg-accent text-accent-ink"
             : "rounded-bl-sm bg-surface-strong text-foreground"
         } ${selected ? "ring-2 ring-accent" : ""}`}
       >
+        {quoted && (
+          <div className="border-l-2 border-current/40 bg-black/15 px-3 py-1.5">
+            <p className="text-[0.65rem] font-medium opacity-90">
+              {quoted.mine ? "You" : `@${peerUsername}`}
+            </p>
+            <p className="truncate text-xs opacity-70">{quoted.text}</p>
+          </div>
+        )}
         {m.image && (
           <ImageBlock
             image={m.image}
@@ -391,6 +447,101 @@ function Bubble({
           </span>
         </div>
       </div>
+
+      {Object.keys(counts).length > 0 && (
+        <div className="flex flex-wrap gap-1">
+          {Object.entries(counts).map(([emoji, count]) => (
+            <button
+              key={emoji}
+              onClick={() => onReact(emoji)}
+              className={`flex items-center gap-0.5 rounded-full border px-1.5 py-0.5 text-xs ${
+                myReaction === emoji
+                  ? "border-accent bg-accent/15 text-accent"
+                  : "border-border-soft bg-surface-strong text-muted"
+              }`}
+            >
+              <span>{emoji}</span>
+              <span>{count}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+
+  const trigger = !selecting && (
+    <div className="relative mb-1 shrink-0">
+      <button
+        onClick={() => setMenu((v) => !v)}
+        aria-label="React or reply"
+        className="grid h-7 w-7 place-items-center rounded-full text-faint hover:text-foreground"
+      >
+        ⋯
+      </button>
+      {menu && (
+        <div
+          className={`absolute bottom-full z-20 mb-1 flex items-center gap-1 rounded-full border border-border-strong bg-bg-elevated px-2 py-1 shadow-lg ${
+            m.mine ? "right-0" : "left-0"
+          }`}
+        >
+          {REACTIONS.map((e) => (
+            <button
+              key={e}
+              onClick={() => {
+                onReact(e);
+                setMenu(false);
+              }}
+              className="text-base transition-transform hover:scale-125"
+            >
+              {e}
+            </button>
+          ))}
+          <span className="mx-0.5 h-4 w-px bg-border-strong" />
+          <button
+            onClick={() => {
+              onReply();
+              setMenu(false);
+            }}
+            aria-label="Reply"
+            className="px-1 text-sm text-muted hover:text-foreground"
+          >
+            ↩
+          </button>
+        </div>
+      )}
+    </div>
+  );
+
+  return (
+    <div
+      className={`flex items-end gap-1.5 ${
+        m.mine ? "justify-end" : "justify-start"
+      } ${selecting ? "cursor-pointer" : ""}`}
+      onClick={selecting ? onToggle : undefined}
+    >
+      {selecting && (
+        <span
+          aria-hidden
+          className={`mb-2 grid h-4 w-4 shrink-0 place-items-center rounded-full border text-[0.6rem] ${
+            selected
+              ? "border-accent bg-accent text-accent-ink"
+              : "border-border-strong"
+          }`}
+        >
+          {selected ? "✓" : ""}
+        </span>
+      )}
+      {m.mine ? (
+        <>
+          {trigger}
+          {bubbleCol}
+        </>
+      ) : (
+        <>
+          {bubbleCol}
+          {trigger}
+        </>
+      )}
     </div>
   );
 }

@@ -210,8 +210,10 @@ workaround so the server never sees plaintext.
       notifies the lobby via DO RPC (`recordActivity`/`clearUnread`); lobby tracks per-user
       unread + a ciphertext preview (client decrypts), pushes `conversation:activity`. List
       sorts by recent + shows a total-unread badge. Verified by `scripts/unread-check.ts` (7/7).
-- [ ] Emoji **reactions** to messages (small protocol add; reuses relay).
-- [ ] **Reply / quote** a message.
+- [x] Emoji **reactions** to messages (👍❤️😂😮😢🙏; toggle, relayed + persisted on the
+      stored message; chips show counts). Verified in `scripts/reactions-check.ts`.
+- [x] **Reply / quote** a message — replyTo references a message id (E2E: the client
+      renders the quote from its own decrypted copy); carried on relay + history.
 - [x] **Disappearing messages** — per-conversation TTL (off/1h/24h/7d, either member sets it).
       Server stamps `expiresAt`; a Durable Object **alarm** sweeps expired messages (history
       rows + R2 blobs) and broadcasts deletion; clients also expire locally via timers.

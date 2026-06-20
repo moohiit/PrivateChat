@@ -152,6 +152,7 @@ export class ConversationServer extends Server<Env> {
           media: msg.media,
           sentAt: msg.sentAt,
           expiresAt,
+          replyTo: msg.replyTo,
         });
 
         let msgKey: string | undefined;
@@ -164,6 +165,7 @@ export class ConversationServer extends Server<Env> {
             media: msg.media,
             sentAt: msg.sentAt,
             expiresAt,
+            replyTo: msg.replyTo,
           };
           msgKey = this.msgKey(stored);
           await this.ctx.storage.put(msgKey, stored);
@@ -187,6 +189,21 @@ export class ConversationServer extends Server<Env> {
       case "message:delete":
         await this.handleDelete(msg.items);
         return;
+      case "reaction": {
+        if (typeof msg.emoji !== "string" || msg.emoji.length > 16) return;
+        this.broadcastExcept(connection.id, {
+          type: "reaction",
+          id: msg.id,
+          from: me.userId,
+          emoji: msg.emoji,
+          op: msg.op,
+        });
+        // Persist on the stored message so it survives reloads.
+        if (this.effectivePersist()) {
+          await this.updateStoredReaction(msg.id, me.userId, msg.emoji, msg.op);
+        }
+        return;
+      }
       case "receipt":
         this.broadcastExcept(connection.id, {
           type: "receipt",
@@ -293,6 +310,24 @@ export class ConversationServer extends Server<Env> {
     });
     const all = [...map.values()].sort((a, b) => a.sentAt - b.sentAt);
     return all.slice(-MAX_HISTORY);
+  }
+
+  /** Update a stored message's reaction (so it survives reloads). */
+  private async updateStoredReaction(
+    id: string,
+    userId: string,
+    emoji: string,
+    op: "add" | "remove",
+  ): Promise<void> {
+    const map = await this.ctx.storage.list<StoredMessage>({ prefix: MSG_PREFIX });
+    for (const [k, m] of map) {
+      if (m.id !== id) continue;
+      const reactions = { ...(m.reactions ?? {}) };
+      if (op === "remove") delete reactions[userId];
+      else reactions[userId] = emoji;
+      await this.ctx.storage.put(k, { ...m, reactions });
+      return;
+    }
   }
 
   /** R2 key for a media id: `<scope>/<cid>/<id>` (scope from the id's first char). */
