@@ -7,6 +7,7 @@ import {
   type MessageStatus,
 } from "@/lib/client/useChat";
 import { MAX_IMAGE_BYTES, MAX_FILE_BYTES } from "@/lib/client/media";
+import { startWavRecording, type WavRecorder } from "@/lib/client/recorder";
 import type { Conversation } from "@/lib/protocol";
 
 const DISAPPEAR_OPTIONS = [
@@ -17,13 +18,6 @@ const DISAPPEAR_OPTIONS = [
 ];
 
 const REACTIONS = ["👍", "❤️", "😂", "😮", "😢", "🙏"];
-
-const AUDIO_MIME_CANDIDATES = [
-  "audio/webm;codecs=opus",
-  "audio/webm",
-  "audio/mp4",
-  "audio/ogg;codecs=opus",
-];
 
 function mediaLabel(m: ChatMessage): string {
   const k = m.image?.media?.kind;
@@ -79,12 +73,8 @@ export default function ChatView({
   const scrollRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const docRef = useRef<HTMLInputElement>(null);
-  const recorderRef = useRef<MediaRecorder | null>(null);
-  const chunksRef = useRef<Blob[]>([]);
-  const streamRef = useRef<MediaStream | null>(null);
+  const recorderRef = useRef<WavRecorder | null>(null);
   const recTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const recStartRef = useRef(0);
-  const sendOnStopRef = useRef(true);
   const replyToRef = useRef<ChatMessage | null>(null);
 
   const byId = new Map(messages.map((m) => [m.id, m]));
@@ -97,60 +87,19 @@ export default function ChatView({
     replyToRef.current = replyTo;
   }, [replyTo]);
 
-  // Stop recording + release the mic if the chat unmounts.
+  // Cancel recording + release the mic if the chat unmounts.
   useEffect(() => {
     return () => {
       if (recTimerRef.current) clearInterval(recTimerRef.current);
-      try {
-        recorderRef.current?.stop();
-      } catch {
-        /* ignore */
-      }
-      streamRef.current?.getTracks().forEach((t) => t.stop());
+      recorderRef.current?.cancel();
+      recorderRef.current = null;
     };
   }, []);
 
   async function startRecording() {
     if (recording) return;
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      streamRef.current = stream;
-      const mime =
-        AUDIO_MIME_CANDIDATES.find((t) =>
-          typeof MediaRecorder !== "undefined" &&
-          MediaRecorder.isTypeSupported?.(t),
-        ) ?? "";
-      const rec = mime
-        ? new MediaRecorder(stream, { mimeType: mime })
-        : new MediaRecorder(stream);
-      chunksRef.current = [];
-      rec.ondataavailable = (e) => {
-        if (e.data.size) chunksRef.current.push(e.data);
-      };
-      rec.onstop = () => {
-        const actualMime = rec.mimeType || mime || "audio/webm";
-        const blob = new Blob(chunksRef.current, { type: actualMime });
-        const duration = Math.max(
-          1,
-          Math.round((Date.now() - recStartRef.current) / 1000),
-        );
-        streamRef.current?.getTracks().forEach((t) => t.stop());
-        streamRef.current = null;
-        if (recTimerRef.current) {
-          clearInterval(recTimerRef.current);
-          recTimerRef.current = null;
-        }
-        setRecording(false);
-        setRecSecs(0);
-        recorderRef.current = null;
-        if (sendOnStopRef.current && blob.size > 0) {
-          void sendAudio(blob, actualMime, duration, replyToRef.current?.id);
-          setReplyTo(null);
-        }
-      };
-      recorderRef.current = rec;
-      recStartRef.current = Date.now();
-      rec.start();
+      recorderRef.current = await startWavRecording();
       setRecording(true);
       setRecSecs(0);
       recTimerRef.current = setInterval(() => setRecSecs((s) => s + 1), 1000);
@@ -159,12 +108,33 @@ export default function ChatView({
     }
   }
 
-  function stopRecording(send: boolean) {
-    sendOnStopRef.current = send;
+  async function finishRecording(send: boolean) {
+    const rec = recorderRef.current;
+    recorderRef.current = null;
+    if (recTimerRef.current) {
+      clearInterval(recTimerRef.current);
+      recTimerRef.current = null;
+    }
+    setRecording(false);
+    setRecSecs(0);
+    if (!rec) return;
+    if (!send) {
+      rec.cancel();
+      return;
+    }
     try {
-      recorderRef.current?.stop();
+      const { blob, mime, duration } = await rec.stop();
+      if (blob.size > 0 && duration >= 0.3) {
+        void sendAudio(
+          blob,
+          mime,
+          Math.max(1, Math.round(duration)),
+          replyToRef.current?.id,
+        );
+        setReplyTo(null);
+      }
     } catch {
-      setRecording(false);
+      setError("Couldn't process the recording.");
     }
   }
 
@@ -441,7 +411,7 @@ export default function ChatView({
         <div className="flex items-center gap-3 border-t border-border-soft px-3 py-3">
           <button
             type="button"
-            onClick={() => stopRecording(false)}
+            onClick={() => void finishRecording(false)}
             aria-label="Cancel recording"
             className="btn-ghost grid h-10 w-10 shrink-0 place-items-center rounded-[0.625rem] text-sm"
           >
@@ -453,7 +423,7 @@ export default function ChatView({
           </span>
           <button
             type="button"
-            onClick={() => stopRecording(true)}
+            onClick={() => void finishRecording(true)}
             aria-label="Send voice message"
             className="btn-accent rounded-[0.625rem] px-4 py-2.5 text-sm font-semibold"
           >
