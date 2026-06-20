@@ -831,26 +831,20 @@ function Bubble({
   );
 }
 
-// Shared AudioContext for decoding + playback (created lazily on first use, so
-// it's tied to a user gesture and never blocked by autoplay policy).
-let sharedAudioCtx: AudioContext | null = null;
-function getAudioCtx(): AudioContext {
-  if (!sharedAudioCtx) {
-    const AC: typeof AudioContext =
-      window.AudioContext ||
-      (window as unknown as { webkitAudioContext: typeof AudioContext })
-        .webkitAudioContext;
-    sharedAudioCtx = new AC();
-  }
-  return sharedAudioCtx;
-}
+// Map the browser's MediaError.code to a short human reason for diagnostics.
+const AUDIO_ERR: Record<number, string> = {
+  1: "aborted",
+  2: "network",
+  3: "decode failed",
+  4: "format not supported",
+};
 
 /**
- * Voice-note player built on the Web Audio API rather than a hidden <audio>
- * element. decodeAudioData reliably plays WAV on every browser (including
- * mobile browsers that block off-screen/opacity-0 <audio>), and gives an exact
- * duration. Genuinely unsupported clips (e.g. legacy Opus on a device without
- * the codec) fail decode and are clearly marked as unplayable.
+ * Voice-note player using the NATIVE <audio controls> element. This is the most
+ * compatible option: the browser handles decoding/seeking/playback for whatever
+ * formats it supports (WAV plays inline everywhere). A custom Web Audio player
+ * proved fragile across mobile browsers, so we defer to the platform and only
+ * add a small header row + a clear error/download fallback on top.
  */
 function AudioPlayer({
   url,
@@ -863,175 +857,57 @@ function AudioPlayer({
   mine: boolean;
   onDownload: () => void;
 }) {
-  const bufferRef = useRef<AudioBuffer | null>(null);
-  const srcRef = useRef<AudioBufferSourceNode | null>(null);
-  const startedAtRef = useRef(0); // ctx.currentTime when the current play began
-  const offsetRef = useRef(0); // seconds into the clip the current play started
-  const rafRef = useRef<number | null>(null);
-  const [ready, setReady] = useState(false);
-  const [playing, setPlaying] = useState(false);
-  const [cur, setCur] = useState(0);
-  const [total, setTotal] = useState(duration ?? 0);
-  const [error, setError] = useState(false);
-
-  const stopSource = useCallbackRef(() => {
-    if (srcRef.current) {
-      srcRef.current.onended = null;
-      try {
-        srcRef.current.stop();
-      } catch {
-        /* already stopped */
-      }
-      srcRef.current.disconnect();
-      srcRef.current = null;
-    }
-    if (rafRef.current) {
-      cancelAnimationFrame(rafRef.current);
-      rafRef.current = null;
-    }
-  });
-
-  // Decode the clip whenever the (decrypted) blob URL changes.
-  useEffect(() => {
-    let alive = true;
-    setReady(false);
-    setError(false);
-    setPlaying(false);
-    setCur(0);
-    offsetRef.current = 0;
-    if (!url) return;
-    (async () => {
-      try {
-        const res = await fetch(url);
-        const bytes = await res.arrayBuffer();
-        const decoded = await getAudioCtx().decodeAudioData(bytes);
-        if (!alive) return;
-        bufferRef.current = decoded;
-        setTotal(decoded.duration);
-        setReady(true);
-      } catch {
-        if (alive) setError(true);
-      }
-    })();
-    return () => {
-      alive = false;
-      stopSource();
-    };
-  }, [url, stopSource]);
-
-  function frame() {
-    const ctx = getAudioCtx();
-    const elapsed = offsetRef.current + (ctx.currentTime - startedAtRef.current);
-    setCur(Math.min(elapsed, total));
-    rafRef.current = requestAnimationFrame(frame);
-  }
-
-  async function play() {
-    const ctx = getAudioCtx();
-    if (ctx.state === "suspended") await ctx.resume();
-    const buffer = bufferRef.current;
-    if (!buffer) return;
-    const startOffset = offsetRef.current >= total ? 0 : offsetRef.current;
-    offsetRef.current = startOffset;
-    const src = ctx.createBufferSource();
-    src.buffer = buffer;
-    src.connect(ctx.destination);
-    src.onended = () => {
-      if (srcRef.current !== src) return; // superseded by pause/seek
-      stopSource();
-      offsetRef.current = 0;
-      setCur(0);
-      setPlaying(false);
-    };
-    startedAtRef.current = ctx.currentTime;
-    src.start(0, startOffset);
-    srcRef.current = src;
-    setPlaying(true);
-    rafRef.current = requestAnimationFrame(frame);
-  }
-
-  function pause() {
-    const ctx = getAudioCtx();
-    offsetRef.current += ctx.currentTime - startedAtRef.current;
-    stopSource();
-    setPlaying(false);
-  }
-
-  function toggle(e: React.MouseEvent) {
-    e.stopPropagation();
-    if (error || !ready) return;
-    if (playing) pause();
-    else void play();
-  }
-
-  function seek(e: React.MouseEvent) {
-    e.stopPropagation();
-    if (!total || !ready) return;
-    const rect = e.currentTarget.getBoundingClientRect();
-    const ratio = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
-    const t = ratio * total;
-    const wasPlaying = playing;
-    if (wasPlaying) stopSource();
-    offsetRef.current = t;
-    setCur(t);
-    if (wasPlaying) void play();
-  }
-
-  const pct = total ? Math.min(100, (cur / total) * 100) : 0;
+  const [err, setErr] = useState<number | null>(null);
   const sub = mine ? "text-accent-ink/70" : "text-faint";
 
   return (
     <div
-      className="flex items-center gap-2 px-3 py-2.5"
+      className="flex w-60 max-w-full flex-col gap-1.5 px-2.5 py-2"
       onClick={(e) => e.stopPropagation()}
     >
-      <button
-        type="button"
-        onClick={toggle}
-        disabled={error || !ready}
-        aria-label={error ? "Unplayable" : playing ? "Pause" : "Play"}
-        className={`grid h-8 w-8 shrink-0 place-items-center rounded-full text-sm disabled:opacity-60 ${
-          mine ? "bg-accent-ink/15 text-accent-ink" : "bg-foreground/10 text-foreground"
-        }`}
-      >
-        {error ? "⚠" : !ready ? "…" : playing ? "⏸" : "▶"}
-      </button>
-      <div
-        onClick={seek}
-        className={`h-1.5 w-24 shrink-0 cursor-pointer rounded-full sm:w-32 ${
-          mine ? "bg-accent-ink/20" : "bg-foreground/15"
-        }`}
-      >
-        <div
-          className={`h-full rounded-full ${mine ? "bg-accent-ink" : "bg-accent"}`}
-          style={{ width: `${pct}%` }}
-        />
+      <div className={`flex items-center gap-2 text-xs ${sub}`}>
+        <span aria-hidden>🎤</span>
+        <span>
+          Voice message
+          {duration ? ` · ${fmtDuration(Math.round(duration))}` : ""}
+        </span>
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onDownload();
+          }}
+          aria-label="Download voice message"
+          className="ml-auto text-sm"
+        >
+          ↓
+        </button>
       </div>
-      <span className={`shrink-0 text-[0.65rem] tabular-nums ${sub}`}>
-        {error
-          ? "unplayable"
-          : `${fmtDuration(Math.round(cur))}/${fmtDuration(Math.round(total))}`}
-      </span>
-      <button
-        type="button"
-        onClick={(e) => {
-          e.stopPropagation();
-          onDownload();
-        }}
-        aria-label="Download voice message"
-        className={`shrink-0 text-sm ${sub}`}
-      >
-        ↓
-      </button>
+      {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
+      <audio
+        src={url}
+        controls
+        preload="metadata"
+        playsInline
+        onError={(e) => setErr(e.currentTarget.error?.code ?? -1)}
+        onPlay={() => setErr(null)}
+        className="h-9 w-full"
+        style={{ colorScheme: "dark" }}
+      />
+      {err !== null && (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onDownload();
+          }}
+          className="text-left text-[0.65rem] text-danger"
+        >
+          Couldn’t play ({AUDIO_ERR[err] ?? `error ${err}`}) — tap to download
+        </button>
+      )}
     </div>
   );
-}
-
-// Stable callback identity for cleanup deps (avoids re-running decode effect).
-function useCallbackRef<T extends (...args: never[]) => unknown>(fn: T): T {
-  const ref = useRef(fn);
-  ref.current = fn;
-  return useRef(((...args: never[]) => ref.current(...args)) as T).current;
 }
 
 function MediaBlock({

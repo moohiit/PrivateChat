@@ -26,8 +26,12 @@ const csp = [
   `script-src ${scriptSrc}`,
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob:",
+  // Voice messages play from decrypted blob: URLs; without this, media-src falls
+  // back to default-src 'self' and the browser blocks every <audio> blob.
+  "media-src 'self' blob: data:",
   "font-src 'self' data:",
-  `connect-src ${connectSrc}`,
+  // blob: lets us fetch() decrypted media bytes client-side if needed.
+  `connect-src ${connectSrc} blob:`,
   "frame-ancestors 'none'",
   "base-uri 'self'",
   "form-action 'self'",
