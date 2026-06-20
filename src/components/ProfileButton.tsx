@@ -28,14 +28,15 @@ export default function ProfileButton({
       <button
         onClick={() => setOpen(true)}
         aria-label="Edit your profile"
-        className="flex items-center gap-2 rounded-full border border-border-soft p-0.5 pr-2.5 transition-colors hover:border-border-strong"
+        title="Edit your profile"
+        className="flex items-center gap-2 rounded-full ring-1 ring-border-soft transition hover:ring-border-strong sm:bg-surface-strong sm:py-1 sm:pl-1 sm:pr-3.5"
       >
         <Avatar
           name={profile?.displayName || username}
           avatar={profile?.avatar}
-          size={28}
+          size={34}
         />
-        <span className="hidden text-sm text-muted sm:inline">
+        <span className="hidden max-w-[10rem] truncate text-sm text-muted sm:inline">
           {profile?.displayName ? (
             profile.displayName
           ) : (

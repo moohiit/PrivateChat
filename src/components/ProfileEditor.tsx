@@ -77,7 +77,7 @@ export default function ProfileEditor({
       onClick={onClose}
     >
       <div
-        className="surface w-full max-w-sm p-6"
+        className="w-full max-w-sm rounded-2xl border border-border-strong bg-bg-elevated p-6 shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="mb-5 flex items-center justify-between">

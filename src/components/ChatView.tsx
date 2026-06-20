@@ -831,6 +831,27 @@ function Bubble({
   );
 }
 
+// Shared AudioContext for decoding + playback (created lazily on first use, so
+// it's tied to a user gesture and never blocked by autoplay policy).
+let sharedAudioCtx: AudioContext | null = null;
+function getAudioCtx(): AudioContext {
+  if (!sharedAudioCtx) {
+    const AC: typeof AudioContext =
+      window.AudioContext ||
+      (window as unknown as { webkitAudioContext: typeof AudioContext })
+        .webkitAudioContext;
+    sharedAudioCtx = new AC();
+  }
+  return sharedAudioCtx;
+}
+
+/**
+ * Voice-note player built on the Web Audio API rather than a hidden <audio>
+ * element. decodeAudioData reliably plays WAV on every browser (including
+ * mobile browsers that block off-screen/opacity-0 <audio>), and gives an exact
+ * duration. Genuinely unsupported clips (e.g. legacy Opus on a device without
+ * the codec) fail decode and are clearly marked as unplayable.
+ */
 function AudioPlayer({
   url,
   duration,
@@ -842,62 +863,118 @@ function AudioPlayer({
   mine: boolean;
   onDownload: () => void;
 }) {
-  const ref = useRef<HTMLAudioElement>(null);
+  const bufferRef = useRef<AudioBuffer | null>(null);
+  const srcRef = useRef<AudioBufferSourceNode | null>(null);
+  const startedAtRef = useRef(0); // ctx.currentTime when the current play began
+  const offsetRef = useRef(0); // seconds into the clip the current play started
+  const rafRef = useRef<number | null>(null);
+  const [ready, setReady] = useState(false);
   const [playing, setPlaying] = useState(false);
   const [cur, setCur] = useState(0);
   const [total, setTotal] = useState(duration ?? 0);
   const [error, setError] = useState(false);
 
+  const stopSource = useCallbackRef(() => {
+    if (srcRef.current) {
+      srcRef.current.onended = null;
+      try {
+        srcRef.current.stop();
+      } catch {
+        /* already stopped */
+      }
+      srcRef.current.disconnect();
+      srcRef.current = null;
+    }
+    if (rafRef.current) {
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+    }
+  });
+
+  // Decode the clip whenever the (decrypted) blob URL changes.
   useEffect(() => {
-    const a = ref.current;
-    if (!a) return;
-    // Use the element's duration only when it's known/finite; otherwise keep the
-    // duration we recorded (MediaRecorder WebM reports Infinity). No seek hacks —
-    // they can park the element at the end and break playback.
-    const onMeta = () => {
-      if (isFinite(a.duration) && a.duration > 0) setTotal(a.duration);
-    };
-    const onTime = () => setCur(a.currentTime);
-    const onEnd = () => {
-      setPlaying(false);
-      setCur(0);
-    };
-    const onPlay = () => setPlaying(true);
-    const onPause = () => setPlaying(false);
-    a.addEventListener("loadedmetadata", onMeta);
-    a.addEventListener("durationchange", onMeta);
-    a.addEventListener("timeupdate", onTime);
-    a.addEventListener("ended", onEnd);
-    a.addEventListener("play", onPlay);
-    a.addEventListener("pause", onPause);
+    let alive = true;
+    setReady(false);
+    setError(false);
+    setPlaying(false);
+    setCur(0);
+    offsetRef.current = 0;
+    if (!url) return;
+    (async () => {
+      try {
+        const res = await fetch(url);
+        const bytes = await res.arrayBuffer();
+        const decoded = await getAudioCtx().decodeAudioData(bytes);
+        if (!alive) return;
+        bufferRef.current = decoded;
+        setTotal(decoded.duration);
+        setReady(true);
+      } catch {
+        if (alive) setError(true);
+      }
+    })();
     return () => {
-      a.removeEventListener("loadedmetadata", onMeta);
-      a.removeEventListener("durationchange", onMeta);
-      a.removeEventListener("timeupdate", onTime);
-      a.removeEventListener("ended", onEnd);
-      a.removeEventListener("play", onPlay);
-      a.removeEventListener("pause", onPause);
+      alive = false;
+      stopSource();
     };
-  }, [url]);
+  }, [url, stopSource]);
+
+  function frame() {
+    const ctx = getAudioCtx();
+    const elapsed = offsetRef.current + (ctx.currentTime - startedAtRef.current);
+    setCur(Math.min(elapsed, total));
+    rafRef.current = requestAnimationFrame(frame);
+  }
+
+  async function play() {
+    const ctx = getAudioCtx();
+    if (ctx.state === "suspended") await ctx.resume();
+    const buffer = bufferRef.current;
+    if (!buffer) return;
+    const startOffset = offsetRef.current >= total ? 0 : offsetRef.current;
+    offsetRef.current = startOffset;
+    const src = ctx.createBufferSource();
+    src.buffer = buffer;
+    src.connect(ctx.destination);
+    src.onended = () => {
+      if (srcRef.current !== src) return; // superseded by pause/seek
+      stopSource();
+      offsetRef.current = 0;
+      setCur(0);
+      setPlaying(false);
+    };
+    startedAtRef.current = ctx.currentTime;
+    src.start(0, startOffset);
+    srcRef.current = src;
+    setPlaying(true);
+    rafRef.current = requestAnimationFrame(frame);
+  }
+
+  function pause() {
+    const ctx = getAudioCtx();
+    offsetRef.current += ctx.currentTime - startedAtRef.current;
+    stopSource();
+    setPlaying(false);
+  }
 
   function toggle(e: React.MouseEvent) {
     e.stopPropagation();
-    const a = ref.current;
-    if (!a) return;
-    if (a.paused) {
-      a.play().catch(() => setError(true));
-    } else {
-      a.pause();
-    }
+    if (error || !ready) return;
+    if (playing) pause();
+    else void play();
   }
+
   function seek(e: React.MouseEvent) {
     e.stopPropagation();
-    const a = ref.current;
-    if (!a || !total) return;
+    if (!total || !ready) return;
     const rect = e.currentTarget.getBoundingClientRect();
     const ratio = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
-    a.currentTime = ratio * total;
-    setCur(a.currentTime);
+    const t = ratio * total;
+    const wasPlaying = playing;
+    if (wasPlaying) stopSource();
+    offsetRef.current = t;
+    setCur(t);
+    if (wasPlaying) void play();
   }
 
   const pct = total ? Math.min(100, (cur / total) * 100) : 0;
@@ -908,24 +985,16 @@ function AudioPlayer({
       className="flex items-center gap-2 px-3 py-2.5"
       onClick={(e) => e.stopPropagation()}
     >
-      <audio
-        ref={ref}
-        src={url}
-        preload="metadata"
-        playsInline
-        onError={() => setError(true)}
-        style={{ position: "absolute", width: 1, height: 1, opacity: 0 }}
-      />
       <button
         type="button"
         onClick={toggle}
-        disabled={error}
-        aria-label={playing ? "Pause" : "Play"}
-        className={`grid h-8 w-8 shrink-0 place-items-center rounded-full text-sm disabled:opacity-50 ${
+        disabled={error || !ready}
+        aria-label={error ? "Unplayable" : playing ? "Pause" : "Play"}
+        className={`grid h-8 w-8 shrink-0 place-items-center rounded-full text-sm disabled:opacity-60 ${
           mine ? "bg-accent-ink/15 text-accent-ink" : "bg-foreground/10 text-foreground"
         }`}
       >
-        {error ? "⚠" : playing ? "⏸" : "▶"}
+        {error ? "⚠" : !ready ? "…" : playing ? "⏸" : "▶"}
       </button>
       <div
         onClick={seek}
@@ -940,7 +1009,7 @@ function AudioPlayer({
       </div>
       <span className={`shrink-0 text-[0.65rem] tabular-nums ${sub}`}>
         {error
-          ? "tap ↓"
+          ? "unplayable"
           : `${fmtDuration(Math.round(cur))}/${fmtDuration(Math.round(total))}`}
       </span>
       <button
@@ -956,6 +1025,13 @@ function AudioPlayer({
       </button>
     </div>
   );
+}
+
+// Stable callback identity for cleanup deps (avoids re-running decode effect).
+function useCallbackRef<T extends (...args: never[]) => unknown>(fn: T): T {
+  const ref = useRef(fn);
+  ref.current = fn;
+  return useRef(((...args: never[]) => ref.current(...args)) as T).current;
 }
 
 function MediaBlock({
