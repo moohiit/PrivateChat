@@ -1,5 +1,6 @@
 import {
   Server,
+  getServerByName,
   type Connection,
   type ConnectionContext,
   type WSMessage,
@@ -98,6 +99,9 @@ export class ConversationServer extends Server<Env> {
     });
     const history = await this.loadHistory();
     this.send(connection, { type: "history", messages: history });
+
+    // Opening the conversation clears this user's unread badge in the lobby.
+    await this.notifyLobbyClear(userId);
   }
 
   async onMessage(connection: Connection, message: WSMessage) {
@@ -146,6 +150,13 @@ export class ConversationServer extends Server<Env> {
           };
           await this.ctx.storage.put(this.msgKey(stored), stored);
         }
+        // Update the conversation list (unread + preview) via the lobby.
+        await this.notifyLobbyActivity(me, {
+          hasMedia,
+          ciphertext: hasText ? msg.ciphertext : undefined,
+          iv: hasText ? msg.iv : undefined,
+          sentAt: msg.sentAt,
+        });
         return;
       }
       case "message:delete":
@@ -245,6 +256,46 @@ export class ConversationServer extends Server<Env> {
     await Promise.all(ops);
 
     this.broadcastAll({ type: "messages:deleted", ids: [...ids] });
+  }
+
+  /* ----------------------- lobby (conversation list) --------------------- */
+
+  /** Tell the lobby about a new message (updates unread + preview). */
+  private async notifyLobbyActivity(
+    sender: ConnState,
+    preview: {
+      hasMedia: boolean;
+      ciphertext?: string;
+      iv?: string;
+      sentAt: number;
+    },
+  ): Promise<void> {
+    const recipientId = sender.peerId;
+    if (!recipientId) return;
+    // Don't bump unread if the recipient is currently viewing this room.
+    const bump = (this.members.get(recipientId)?.size ?? 0) === 0;
+    try {
+      const lobby = await getServerByName(this.env.Lobby, "main");
+      await lobby.recordActivity(
+        sender.userId,
+        recipientId,
+        this.name,
+        preview,
+        bump,
+      );
+    } catch {
+      /* best-effort; conversations:snapshot re-syncs on next connect */
+    }
+  }
+
+  /** Tell the lobby this user opened the conversation (clear their unread). */
+  private async notifyLobbyClear(userId: string): Promise<void> {
+    try {
+      const lobby = await getServerByName(this.env.Lobby, "main");
+      await lobby.clearUnread(userId, this.name);
+    } catch {
+      /* best-effort */
+    }
   }
 
   private broadcastPersistState() {

@@ -1,7 +1,12 @@
 "use client";
 
 import { useState } from "react";
-import { LobbyProvider, useLobby, type ConnStatus } from "@/lib/client/lobby";
+import {
+  LobbyProvider,
+  useLobby,
+  type ConnStatus,
+  type ConvActivity,
+} from "@/lib/client/lobby";
 import ChatView from "@/components/ChatView";
 import type { Conversation } from "@/lib/protocol";
 
@@ -84,16 +89,27 @@ function StatusBadge({ status }: { status: ConnStatus }) {
 function Card({
   title,
   count,
+  badge,
   children,
 }: {
   title: string;
   count?: number;
+  badge?: number;
   children: React.ReactNode;
 }) {
   return (
     <section className="surface flex flex-col p-5 sm:p-6">
       <header className="mb-4 flex items-center justify-between">
-        <h2 className="text-sm font-medium tracking-tight text-muted">{title}</h2>
+        <span className="flex items-center gap-2">
+          <h2 className="text-sm font-medium tracking-tight text-muted">
+            {title}
+          </h2>
+          {badge !== undefined && (
+            <span className="grid h-5 min-w-5 place-items-center rounded-full bg-accent px-1.5 text-[0.65rem] font-semibold text-accent-ink">
+              {badge}
+            </span>
+          )}
+        </span>
         {count !== undefined && (
           <span className="identifier rounded-full bg-surface-strong px-2 py-0.5 text-xs text-faint">
             {count}
@@ -293,22 +309,37 @@ function OnlineCard({ onOpen }: { onOpen: (c: Conversation) => void }) {
 }
 
 function ConversationsCard({ onOpen }: { onOpen: (c: Conversation) => void }) {
-  const { conversations, convoCrypto, online } = useLobby();
+  const { conversations, convoCrypto, online, activity } = useLobby();
   const onlineIds = new Set(online.map((u) => u.userId));
+  // Most recent activity first; conversations with no messages keep their order.
+  const sorted = [...conversations].sort(
+    (a, b) =>
+      (activity[b.conversationId]?.lastAt ?? 0) -
+      (activity[a.conversationId]?.lastAt ?? 0),
+  );
+  const totalUnread = Object.values(activity).reduce(
+    (n, a) => n + (a?.unread ?? 0),
+    0,
+  );
   return (
-    <Card title="Conversations" count={conversations.length}>
+    <Card
+      title="Conversations"
+      count={conversations.length}
+      badge={totalUnread > 0 ? totalUnread : undefined}
+    >
       {conversations.length === 0 ? (
         <Empty>
           No conversations yet. Once a request is accepted, it appears here.
         </Empty>
       ) : (
         <ul className="flex flex-col gap-2">
-          {conversations.map((c) => (
+          {sorted.map((c) => (
             <ConversationRow
               key={c.conversationId}
               username={c.peer.username}
               crypto={convoCrypto[c.conversationId]}
               online={onlineIds.has(c.peer.userId)}
+              activity={activity[c.conversationId]}
               onOpen={() => onOpen(c)}
             />
           ))}
@@ -329,37 +360,62 @@ function ConversationRow({
   username,
   crypto,
   online,
+  activity,
   onOpen,
 }: {
   username: string;
   crypto?: { status: string; safetyNumber?: string };
   online: boolean;
+  activity?: ConvActivity;
   onOpen: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const status = crypto?.status ?? "deriving";
   const badge = CRYPTO_LABEL[status] ?? CRYPTO_LABEL.deriving;
+  const unread = activity?.unread ?? 0;
+
+  let preview: string;
+  let previewColor = unread > 0 ? "text-foreground" : "text-faint";
+  if (activity?.previewText) preview = activity.previewText;
+  else if (activity?.hasMedia) preview = "📷 Photo";
+  else if (status !== "ready") {
+    preview = badge.text;
+    previewColor = "text-faint";
+  } else preview = "No messages yet";
 
   return (
     <li className="rounded-lg bg-surface-strong px-3 py-2.5">
       <div className="flex items-center justify-between gap-3">
-        <span className="flex min-w-0 items-center gap-2.5">
+        <span className="flex min-w-0 flex-1 items-start gap-2.5">
           <ShieldGlyph color={badge.color} />
-          <span className="identifier truncate text-sm">@{username}</span>
-          {online && (
-            <span className="flex shrink-0 items-center gap-1">
+          <span className="min-w-0 flex-1">
+            <span className="flex items-center gap-2">
               <span
-                className="dot dot-live h-2 w-2 rounded-full bg-accent"
-                aria-hidden
-              />
-              <span className="text-[0.65rem] text-accent">online</span>
+                className={`identifier truncate text-sm ${unread > 0 ? "font-semibold" : ""}`}
+              >
+                @{username}
+              </span>
+              {online && (
+                <span
+                  className="dot dot-live h-1.5 w-1.5 shrink-0 rounded-full bg-accent"
+                  aria-label="online"
+                />
+              )}
             </span>
-          )}
+            <span className={`block truncate text-xs ${previewColor}`}>
+              {preview}
+            </span>
+          </span>
         </span>
         <span className="flex shrink-0 items-center gap-2">
-          <span className="text-xs" style={{ color: badge.color }}>
-            {badge.text}
-          </span>
+          {unread > 0 && (
+            <span
+              aria-label={`${unread} unread`}
+              className="grid h-5 min-w-5 place-items-center rounded-full bg-accent px-1.5 text-[0.65rem] font-semibold text-accent-ink"
+            >
+              {unread > 99 ? "99+" : unread}
+            </span>
+          )}
           {status === "ready" && crypto?.safetyNumber && (
             <button
               onClick={() => setOpen((v) => !v)}

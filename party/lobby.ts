@@ -7,6 +7,7 @@ import {
 import { verifyConnectToken } from "./auth";
 import type { Env } from "./env";
 import type {
+  ConversationSummary,
   LobbyClientMessage,
   LobbyServerMessage,
   PresenceUser,
@@ -29,6 +30,14 @@ type Contact = {
   peerUsername: string;
 };
 
+/** Last-message preview stored per conversation (ciphertext only). */
+type Preview = {
+  hasMedia: boolean;
+  ciphertext?: string;
+  iv?: string;
+  sentAt: number;
+};
+
 export class LobbyServer extends Server<Env> {
   /** userId -> online connections */
   private readonly online = new Map<string, OnlineEntry>();
@@ -39,6 +48,11 @@ export class LobbyServer extends Server<Env> {
   /** userId -> established conversations (durable, server-authoritative) */
   private readonly contacts = new Map<string, Contact[]>();
   private readonly contactsLoaded = new Set<string>();
+  /** userId -> { conversationId -> unread count } (durable) */
+  private readonly unread = new Map<string, Record<string, number>>();
+  private readonly unreadLoaded = new Set<string>();
+  /** conversationId -> last-message preview (durable) */
+  private readonly previews = new Map<string, Preview>();
 
   private async loadContacts(userId: string): Promise<Contact[]> {
     if (!this.contactsLoaded.has(userId)) {
@@ -48,6 +62,75 @@ export class LobbyServer extends Server<Env> {
       this.contactsLoaded.add(userId);
     }
     return this.contacts.get(userId) ?? [];
+  }
+
+  private async loadUnread(userId: string): Promise<Record<string, number>> {
+    if (!this.unreadLoaded.has(userId)) {
+      this.unread.set(
+        userId,
+        (await this.ctx.storage.get<Record<string, number>>(`unread:${userId}`)) ?? {},
+      );
+      this.unreadLoaded.add(userId);
+    }
+    return this.unread.get(userId)!;
+  }
+
+  private async loadPreview(cid: string): Promise<Preview | undefined> {
+    if (this.previews.has(cid)) return this.previews.get(cid);
+    const p = await this.ctx.storage.get<Preview>(`preview:${cid}`);
+    if (p) this.previews.set(cid, p);
+    return p;
+  }
+
+  /**
+   * RPC (called from the conversation room): record a new message's activity —
+   * update the conversation preview, bump the recipient's unread, and push
+   * `conversation:activity` to both members' lobby connections.
+   */
+  async recordActivity(
+    senderId: string,
+    recipientId: string,
+    conversationId: string,
+    preview: Preview,
+    bumpRecipient: boolean,
+  ): Promise<void> {
+    this.previews.set(conversationId, preview);
+    await this.ctx.storage.put(`preview:${conversationId}`, preview);
+
+    if (bumpRecipient) {
+      const u = await this.loadUnread(recipientId);
+      u[conversationId] = (u[conversationId] ?? 0) + 1;
+      await this.ctx.storage.put(`unread:${recipientId}`, u);
+    }
+
+    const pub = {
+      hasMedia: preview.hasMedia,
+      ciphertext: preview.ciphertext,
+      iv: preview.iv,
+    };
+    for (const uid of [recipientId, senderId]) {
+      this.sendToUser(uid, {
+        type: "conversation:activity",
+        conversationId,
+        unread: (await this.loadUnread(uid))[conversationId] ?? 0,
+        preview: pub,
+        lastAt: preview.sentAt,
+      });
+    }
+  }
+
+  /** RPC (called when a user opens the conversation): zero their unread count. */
+  async clearUnread(userId: string, conversationId: string): Promise<void> {
+    const u = await this.loadUnread(userId);
+    if (!u[conversationId]) return;
+    u[conversationId] = 0;
+    await this.ctx.storage.put(`unread:${userId}`, u);
+    this.sendToUser(userId, {
+      type: "conversation:activity",
+      conversationId,
+      unread: 0,
+      lastAt: (await this.loadPreview(conversationId))?.sentAt ?? 0,
+    });
   }
 
   private async addContact(userId: string, contact: Contact): Promise<void> {
@@ -99,12 +182,23 @@ export class LobbyServer extends Server<Env> {
       type: "requests:snapshot",
       incoming: [...(this.pending.get(userId)?.values() ?? [])],
     });
-    this.send(connection, {
-      type: "conversations:snapshot",
-      conversations: contacts.map((c) => ({
+    const unread = await this.loadUnread(userId);
+    const summaries: ConversationSummary[] = [];
+    for (const c of contacts) {
+      const p = await this.loadPreview(c.conversationId);
+      summaries.push({
         conversationId: c.conversationId,
         peer: { userId: c.peerUserId, username: c.peerUsername },
-      })),
+        unread: unread[c.conversationId] ?? 0,
+        preview: p
+          ? { hasMedia: p.hasMedia, ciphertext: p.ciphertext, iv: p.iv }
+          : undefined,
+        lastAt: p?.sentAt ?? 0,
+      });
+    }
+    this.send(connection, {
+      type: "conversations:snapshot",
+      conversations: summaries,
     });
 
     const queued = this.outbox.get(userId);

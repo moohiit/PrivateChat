@@ -15,6 +15,23 @@ export type Conversation = {
   peer: PresenceUser;
 };
 
+/**
+ * Last-message preview for the conversation list. Text is ciphertext the client
+ * decrypts with the conversation key; media-only messages just set hasMedia.
+ */
+export type ConversationPreview = {
+  hasMedia: boolean;
+  ciphertext?: string;
+  iv?: string;
+};
+
+/** A conversation plus its unread count + last-activity preview. */
+export type ConversationSummary = Conversation & {
+  unread: number;
+  preview?: ConversationPreview;
+  lastAt: number;
+};
+
 /* ------------------------------- Lobby ---------------------------------- */
 
 /** Lobby: messages the browser sends to the server. */
@@ -30,7 +47,14 @@ export type LobbyServerMessage =
   | { type: "presence:online"; user: PresenceUser }
   | { type: "presence:offline"; userId: string }
   | { type: "requests:snapshot"; incoming: PresenceUser[] }
-  | { type: "conversations:snapshot"; conversations: Conversation[] }
+  | { type: "conversations:snapshot"; conversations: ConversationSummary[] }
+  | {
+      type: "conversation:activity";
+      conversationId: string;
+      unread: number;
+      preview?: ConversationPreview;
+      lastAt: number;
+    }
   | { type: "request:incoming"; from: PresenceUser }
   | { type: "request:sent"; toUserId: string }
   | { type: "request:accepted"; with: PresenceUser; conversationId: string }

@@ -13,12 +13,14 @@ import {
   importPeerPublicKey,
   deriveConversationKey,
   computeSafetyNumber,
+  decryptMessage,
 } from "@/lib/crypto/conversation";
-import { putConversationKey } from "@/lib/crypto/keystore";
+import { putConversationKey, getConversationKey } from "@/lib/crypto/keystore";
 import { getUnlockedKey } from "@/lib/crypto/session-key";
 import { loadConversations, saveConversation } from "@/lib/crypto/idb";
 import type {
   Conversation,
+  ConversationPreview,
   LobbyClientMessage,
   LobbyServerMessage,
   PresenceUser,
@@ -33,12 +35,22 @@ export type ConversationCrypto = {
   safetyNumber?: string;
 };
 
+/** Per-conversation unread + last-message preview for the conversation list. */
+export type ConvActivity = {
+  unread: number;
+  lastAt: number;
+  hasMedia: boolean;
+  previewText: string | null; // decrypted text, or null
+  previewCipher?: { ciphertext: string; iv: string };
+};
+
 type LobbyState = {
   status: ConnStatus;
   online: PresenceUser[];
   incoming: PresenceUser[];
   sentTo: string[];
   conversations: Conversation[];
+  activity: Record<string, ConvActivity>;
   visible: boolean;
   error: string | null;
 };
@@ -64,9 +76,31 @@ const INITIAL: LobbyState = {
   incoming: [],
   sentTo: [],
   conversations: [],
+  activity: {},
   visible: false,
   error: null,
 };
+
+function previewToActivity(
+  prev: ConvActivity | undefined,
+  unread: number,
+  lastAt: number,
+  preview: ConversationPreview | undefined,
+): ConvActivity {
+  const cipher =
+    preview?.ciphertext && preview?.iv
+      ? { ciphertext: preview.ciphertext, iv: preview.iv }
+      : prev?.previewCipher;
+  // If a new ciphertext arrived, clear stale text so it's re-decrypted.
+  const sameCipher = cipher?.ciphertext === prev?.previewCipher?.ciphertext;
+  return {
+    unread,
+    lastAt: lastAt || prev?.lastAt || 0,
+    hasMedia: preview?.hasMedia ?? prev?.hasMedia ?? false,
+    previewText: sameCipher ? (prev?.previewText ?? null) : null,
+    previewCipher: cipher,
+  };
+}
 
 function reduce(state: LobbyState, msg: LobbyServerMessage): LobbyState {
   switch (msg.type) {
@@ -85,13 +119,39 @@ function reduce(state: LobbyState, msg: LobbyServerMessage): LobbyState {
       return { ...state, incoming: msg.incoming };
     case "conversations:snapshot": {
       const known = new Set(state.conversations.map((c) => c.conversationId));
-      const added = msg.conversations.filter(
-        (c) => !known.has(c.conversationId),
-      );
-      return added.length
-        ? { ...state, conversations: [...state.conversations, ...added] }
-        : state;
+      const added = msg.conversations
+        .filter((c) => !known.has(c.conversationId))
+        .map((c) => ({ conversationId: c.conversationId, peer: c.peer }));
+      const activity = { ...state.activity };
+      for (const c of msg.conversations) {
+        activity[c.conversationId] = previewToActivity(
+          activity[c.conversationId],
+          c.unread,
+          c.lastAt,
+          c.preview,
+        );
+      }
+      return {
+        ...state,
+        conversations: added.length
+          ? [...state.conversations, ...added]
+          : state.conversations,
+        activity,
+      };
     }
+    case "conversation:activity":
+      return {
+        ...state,
+        activity: {
+          ...state.activity,
+          [msg.conversationId]: previewToActivity(
+            state.activity[msg.conversationId],
+            msg.unread,
+            msg.lastAt,
+            msg.preview,
+          ),
+        },
+      };
     case "request:incoming":
       return state.incoming.some((u) => u.userId === msg.from.userId)
         ? state
@@ -147,9 +207,38 @@ export function LobbyProvider({
   const derivedRef = useRef<Set<string>>(new Set());
   const selfPubRef = useRef<string | null>(null);
 
+  const activityRef = useRef<Record<string, ConvActivity>>({});
+  useEffect(() => {
+    activityRef.current = state.activity;
+  }, [state.activity]);
+
   const setCrypto = useCallback(
     (conversationId: string, value: ConversationCrypto) =>
       setConvoCrypto((prev) => ({ ...prev, [conversationId]: value })),
+    [],
+  );
+
+  // Decrypt a conversation's last-message preview (once its key is available).
+  const decryptPreview = useCallback(
+    async (cid: string, cipher?: { ciphertext: string; iv: string }) => {
+      const c = cipher ?? activityRef.current[cid]?.previewCipher;
+      if (!c) return;
+      const key = getConversationKey(cid);
+      if (!key) return; // retried after the key derives
+      try {
+        const text = await decryptMessage(key, c);
+        setState((s) => {
+          const a = s.activity[cid];
+          if (!a) return s;
+          return {
+            ...s,
+            activity: { ...s.activity, [cid]: { ...a, previewText: text } },
+          };
+        });
+      } catch {
+        /* leave as null */
+      }
+    },
     [],
   );
 
@@ -219,6 +308,8 @@ export function LobbyProvider({
           convo.conversationId,
         );
         putConversationKey(convo.conversationId, key);
+        // Decrypt any preview that arrived before the key was ready.
+        void decryptPreview(convo.conversationId);
 
         const selfPub = await ensureSelfPub();
         const safetyNumber = selfPub
@@ -253,6 +344,27 @@ export function LobbyProvider({
         return;
       }
       setState((s) => reduce(s, msg));
+
+      // Decrypt previews (side-effect; key may already be available).
+      if (msg.type === "conversations:snapshot") {
+        for (const c of msg.conversations) {
+          if (c.preview?.ciphertext && c.preview?.iv) {
+            void decryptPreview(c.conversationId, {
+              ciphertext: c.preview.ciphertext,
+              iv: c.preview.iv,
+            });
+          }
+        }
+      } else if (
+        msg.type === "conversation:activity" &&
+        msg.preview?.ciphertext &&
+        msg.preview?.iv
+      ) {
+        void decryptPreview(msg.conversationId, {
+          ciphertext: msg.preview.ciphertext,
+          iv: msg.preview.iv,
+        });
+      }
     };
 
     socket.addEventListener("open", onOpen);

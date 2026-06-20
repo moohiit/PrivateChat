@@ -206,7 +206,10 @@ Tiered by effort. ⚠️ = touches the zero-knowledge model — only do with a c
 workaround so the server never sees plaintext.
 
 ### 🟢 Quick wins (hours)
-- [ ] Unread badges + last-message preview in the conversation list (the deferred Phase 7 item).
+- [x] **Unread badges + last-message preview** in the conversation list. Conversation room
+      notifies the lobby via DO RPC (`recordActivity`/`clearUnread`); lobby tracks per-user
+      unread + a ciphertext preview (client decrypts), pushes `conversation:activity`. List
+      sorts by recent + shows a total-unread badge. Verified by `scripts/unread-check.ts` (7/7).
 - [ ] Emoji **reactions** to messages (small protocol add; reuses relay).
 - [ ] **Reply / quote** a message.
 - [ ] **Disappearing messages** — per-conversation TTL (reuse delete + R2-expiry machinery).
