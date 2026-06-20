@@ -18,6 +18,19 @@ const DISAPPEAR_OPTIONS = [
 
 const REACTIONS = ["👍", "❤️", "😂", "😮", "😢", "🙏"];
 
+const AUDIO_MIME_CANDIDATES = [
+  "audio/webm;codecs=opus",
+  "audio/webm",
+  "audio/mp4",
+  "audio/ogg;codecs=opus",
+];
+
+function mediaLabel(m: ChatMessage): string {
+  if (m.image?.media?.kind === "audio") return "🎤 Voice message";
+  if (m.image) return "📷 Photo";
+  return "message";
+}
+
 export default function ChatView({
   conversation,
   selfUserId,
@@ -38,6 +51,7 @@ export default function ChatView({
     disappearTtl,
     sendText,
     sendImage,
+    sendAudio,
     deleteMessages,
     react,
     setTyping,
@@ -51,14 +65,98 @@ export default function ChatView({
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [replyTo, setReplyTo] = useState<ChatMessage | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [recording, setRecording] = useState(false);
+  const [recSecs, setRecSecs] = useState(0);
   const scrollRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
+  const streamRef = useRef<MediaStream | null>(null);
+  const recTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const recStartRef = useRef(0);
+  const sendOnStopRef = useRef(true);
+  const replyToRef = useRef<ChatMessage | null>(null);
 
   const byId = new Map(messages.map((m) => [m.id, m]));
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
   }, [messages, peerTyping]);
+
+  useEffect(() => {
+    replyToRef.current = replyTo;
+  }, [replyTo]);
+
+  // Stop recording + release the mic if the chat unmounts.
+  useEffect(() => {
+    return () => {
+      if (recTimerRef.current) clearInterval(recTimerRef.current);
+      try {
+        recorderRef.current?.stop();
+      } catch {
+        /* ignore */
+      }
+      streamRef.current?.getTracks().forEach((t) => t.stop());
+    };
+  }, []);
+
+  async function startRecording() {
+    if (recording) return;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      streamRef.current = stream;
+      const mime =
+        AUDIO_MIME_CANDIDATES.find((t) =>
+          typeof MediaRecorder !== "undefined" &&
+          MediaRecorder.isTypeSupported?.(t),
+        ) ?? "";
+      const rec = mime
+        ? new MediaRecorder(stream, { mimeType: mime })
+        : new MediaRecorder(stream);
+      chunksRef.current = [];
+      rec.ondataavailable = (e) => {
+        if (e.data.size) chunksRef.current.push(e.data);
+      };
+      rec.onstop = () => {
+        const actualMime = rec.mimeType || mime || "audio/webm";
+        const blob = new Blob(chunksRef.current, { type: actualMime });
+        const duration = Math.max(
+          1,
+          Math.round((Date.now() - recStartRef.current) / 1000),
+        );
+        streamRef.current?.getTracks().forEach((t) => t.stop());
+        streamRef.current = null;
+        if (recTimerRef.current) {
+          clearInterval(recTimerRef.current);
+          recTimerRef.current = null;
+        }
+        setRecording(false);
+        setRecSecs(0);
+        recorderRef.current = null;
+        if (sendOnStopRef.current && blob.size > 0) {
+          void sendAudio(blob, actualMime, duration, replyToRef.current?.id);
+          setReplyTo(null);
+        }
+      };
+      recorderRef.current = rec;
+      recStartRef.current = Date.now();
+      rec.start();
+      setRecording(true);
+      setRecSecs(0);
+      recTimerRef.current = setInterval(() => setRecSecs((s) => s + 1), 1000);
+    } catch {
+      setError("Microphone access was denied.");
+    }
+  }
+
+  function stopRecording(send: boolean) {
+    sendOnStopRef.current = send;
+    try {
+      recorderRef.current?.stop();
+    } catch {
+      setRecording(false);
+    }
+  }
 
   function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -90,10 +188,7 @@ export default function ChatView({
     if (!m.replyTo) return null;
     const q = byId.get(m.replyTo);
     if (!q) return { mine: false, text: "original message" };
-    return {
-      mine: q.mine,
-      text: q.text || (q.image ? "📷 Photo" : "message"),
-    };
+    return { mine: q.mine, text: q.text || mediaLabel(q) };
   }
 
   function toggleSelect(id: string) {
@@ -119,7 +214,7 @@ export default function ChatView({
   }
 
   return (
-    <div className="surface flex h-[calc(100dvh-7.5rem)] min-h-[24rem] flex-col overflow-hidden p-0 sm:h-[calc(100dvh-9rem)]">
+    <div className="fixed inset-0 z-40 flex flex-col overflow-hidden bg-bg sm:relative sm:inset-auto sm:z-auto sm:h-[calc(100dvh-9rem)] sm:min-h-[24rem] sm:rounded-2xl sm:border sm:border-border-soft sm:bg-surface sm:backdrop-blur">
       {/* Header */}
       <header className="flex items-center gap-3 border-b border-border-soft px-4 py-3">
         {selecting ? (
@@ -256,7 +351,7 @@ export default function ChatView({
         role="log"
         aria-live="polite"
         aria-label={`Conversation with ${peer.username}`}
-        className="flex-1 space-y-2 overflow-y-auto px-4 py-4"
+        className="min-h-0 flex-1 space-y-2 overflow-y-auto px-4 py-4"
       >
         {!keyReady && (
           <Banner>
@@ -302,7 +397,7 @@ export default function ChatView({
               Replying to {replyTo.mine ? "yourself" : `@${peer.username}`}
             </p>
             <p className="truncate text-xs text-faint">
-              {replyTo.text || (replyTo.image ? "📷 Photo" : "message")}
+              {replyTo.text || mediaLabel(replyTo)}
             </p>
           </div>
           <button
@@ -316,50 +411,93 @@ export default function ChatView({
       )}
 
       {/* Composer */}
-      <form
-        onSubmit={submit}
-        className="flex items-end gap-2 border-t border-border-soft px-3 py-3"
-      >
-        <input
-          ref={fileRef}
-          type="file"
-          accept="image/*"
-          multiple
-          onChange={onPickFiles}
-          className="hidden"
-        />
-        <button
-          type="button"
-          onClick={() => fileRef.current?.click()}
-          disabled={!keyReady}
-          aria-label="Attach photo"
-          className="btn-ghost grid h-10 w-10 shrink-0 place-items-center rounded-[0.625rem] text-base disabled:opacity-50"
+      {recording ? (
+        <div className="flex items-center gap-3 border-t border-border-soft px-3 py-3">
+          <button
+            type="button"
+            onClick={() => stopRecording(false)}
+            aria-label="Cancel recording"
+            className="btn-ghost grid h-10 w-10 shrink-0 place-items-center rounded-[0.625rem] text-sm"
+          >
+            ✕
+          </button>
+          <span className="flex flex-1 items-center gap-2 text-sm text-danger">
+            <span className="dot-live inline-block h-2.5 w-2.5 rounded-full bg-danger" />
+            Recording… {fmtDuration(recSecs)}
+          </span>
+          <button
+            type="button"
+            onClick={() => stopRecording(true)}
+            aria-label="Send voice message"
+            className="btn-accent rounded-[0.625rem] px-4 py-2.5 text-sm font-semibold"
+          >
+            Send
+          </button>
+        </div>
+      ) : (
+        <form
+          onSubmit={submit}
+          className="flex items-end gap-2 border-t border-border-soft px-3 py-3"
         >
-          🖼
-        </button>
-        <input
-          value={draft}
-          onChange={(e) => {
-            setDraft(e.target.value);
-            setTyping(e.target.value.length > 0);
-          }}
-          onBlur={() => setTyping(false)}
-          placeholder={keyReady ? "Write a message…" : "Encryption unavailable"}
-          disabled={!keyReady}
-          aria-label={`Message to ${peer.username}`}
-          className="field flex-1 px-3 py-2.5 text-base text-foreground sm:text-sm"
-          autoComplete="off"
-        />
-        <button
-          type="submit"
-          disabled={!keyReady || !draft.trim()}
-          className="btn-accent rounded-[0.625rem] px-4 py-2.5 text-sm font-semibold"
-        >
-          Send
-        </button>
-      </form>
+          <input
+            ref={fileRef}
+            type="file"
+            accept="image/*"
+            multiple
+            onChange={onPickFiles}
+            className="hidden"
+          />
+          <button
+            type="button"
+            onClick={() => fileRef.current?.click()}
+            disabled={!keyReady}
+            aria-label="Attach photo"
+            className="btn-ghost grid h-10 w-10 shrink-0 place-items-center rounded-[0.625rem] text-base disabled:opacity-50"
+          >
+            🖼
+          </button>
+          <input
+            value={draft}
+            onChange={(e) => {
+              setDraft(e.target.value);
+              setTyping(e.target.value.length > 0);
+            }}
+            onBlur={() => setTyping(false)}
+            placeholder={keyReady ? "Write a message…" : "Encryption unavailable"}
+            disabled={!keyReady}
+            aria-label={`Message to ${peer.username}`}
+            className="field min-w-0 flex-1 px-3 py-2.5 text-base text-foreground sm:text-sm"
+            autoComplete="off"
+          />
+          {draft.trim() ? (
+            <button
+              type="submit"
+              disabled={!keyReady}
+              className="btn-accent shrink-0 rounded-[0.625rem] px-4 py-2.5 text-sm font-semibold"
+            >
+              Send
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={startRecording}
+              disabled={!keyReady}
+              aria-label="Record voice message"
+              className="btn-ghost grid h-10 w-10 shrink-0 place-items-center rounded-[0.625rem] text-base disabled:opacity-50"
+            >
+              🎤
+            </button>
+          )}
+        </form>
+      )}
     </div>
   );
+}
+
+function fmtDuration(secs: number): string {
+  const m = Math.floor(secs / 60);
+  const s = secs % 60;
+  return `${m}:${String(s).padStart(2, "0")}`;
 }
 
 function Bubble({
@@ -387,7 +525,8 @@ function Bubble({
 
   function download() {
     if (!m.image?.url) return;
-    const ext = (m.image.media?.mime ?? "image/webp").split("/")[1] ?? "webp";
+    const mime = m.image.media?.mime ?? "image/webp";
+    const ext = (mime.split("/")[1] ?? "bin").split(";")[0];
     const a = document.createElement("a");
     a.href = m.image.url;
     a.download = `privatechat-${m.id.slice(0, 8)}.${ext}`;
@@ -422,8 +561,9 @@ function Bubble({
           </div>
         )}
         {m.image && (
-          <ImageBlock
-            image={m.image}
+          <MediaBlock
+            media={m.image}
+            mine={m.mine}
             alt={`Photo from @${peerUsername}`}
             onDownload={download}
           />
@@ -546,34 +686,71 @@ function Bubble({
   );
 }
 
-function ImageBlock({
-  image,
+function MediaBlock({
+  media,
+  mine,
   alt,
   onDownload,
 }: {
-  image: NonNullable<ChatMessage["image"]>;
+  media: NonNullable<ChatMessage["image"]>;
+  mine: boolean;
   alt: string;
   onDownload: () => void;
 }) {
-  if (image.status === "loading" && !image.url) {
+  const isAudio = media.media?.kind === "audio";
+
+  if (media.status === "loading" && !media.url) {
     return (
-      <div className="grid h-40 w-56 place-items-center bg-black/30 text-xs text-faint">
+      <div
+        className={`grid place-items-center bg-black/30 text-xs text-faint ${
+          isAudio ? "h-12 w-48" : "h-40 w-56"
+        }`}
+      >
         decrypting…
       </div>
     );
   }
-  if (image.status === "error") {
+  if (media.status === "error") {
     return (
-      <div className="grid h-40 w-56 place-items-center bg-black/30 text-xs text-danger">
-        couldn&apos;t load image
+      <div
+        className={`grid place-items-center bg-black/30 text-xs text-danger ${
+          isAudio ? "h-12 w-48" : "h-40 w-56"
+        }`}
+      >
+        couldn&apos;t load {isAudio ? "audio" : "image"}
       </div>
     );
   }
+
+  if (isAudio) {
+    return (
+      <div className="flex items-center gap-2 px-3 py-2">
+        <audio
+          src={media.url ?? ""}
+          controls
+          className="h-9 max-w-[14rem]"
+          onClick={(e) => e.stopPropagation()}
+        />
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onDownload();
+          }}
+          aria-label="Download voice message"
+          className={`shrink-0 text-sm ${mine ? "text-accent-ink/70" : "text-faint"} hover:opacity-100`}
+        >
+          ↓
+        </button>
+      </div>
+    );
+  }
+
   return (
     <div className="relative">
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img
-        src={image.url ?? ""}
+        src={media.url ?? ""}
         alt={alt}
         className="block max-h-72 w-full object-cover"
       />

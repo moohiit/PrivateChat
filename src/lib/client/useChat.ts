@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createConversationSocket } from "./party";
-import { uploadImage, downloadImage } from "./media";
+import { uploadImage, uploadAudio, downloadMedia } from "./media";
 import { getConversationKey } from "@/lib/crypto/keystore";
 import { encryptMessage, decryptMessage } from "@/lib/crypto/conversation";
 import type {
@@ -148,7 +148,7 @@ export function useChat(
     async (messageId: string, media: MediaRef) => {
       try {
         const url = trackUrl(
-          await downloadImage(conversationId, peerUserId, media),
+          await downloadMedia(conversationId, peerUserId, media),
         );
         setState((s) => ({
           ...s,
@@ -422,6 +422,63 @@ export function useChat(
     [conversationId, peerUserId, trackUrl],
   );
 
+  const sendAudio = useCallback(
+    async (blob: Blob, mime: string, duration: number, replyTo?: string) => {
+      const id = randomId();
+      const sentAt = Date.now();
+      const expiresAt =
+        disappearRef.current > 0 ? sentAt + disappearRef.current : undefined;
+      const localUrl = trackUrl(URL.createObjectURL(blob));
+      const optimistic: ChatMessage = {
+        id,
+        mine: true,
+        text: "",
+        sentAt,
+        status: "sending",
+        expiresAt,
+        replyTo,
+        reactions: {},
+        // placeholder so it renders as an audio player immediately
+        image: {
+          url: localUrl,
+          status: "ready",
+          media: { id: "", iv: "", mime, size: 0, kind: "audio", duration },
+        },
+      };
+      setState((s) => ({ ...s, messages: [...s.messages, optimistic] }));
+      scheduleLocalExpiry(id, expiresAt);
+
+      try {
+        const media = await uploadAudio(
+          conversationId,
+          peerUserId,
+          blob,
+          mime,
+          duration,
+          persistRef.current,
+        );
+        socketRef.current?.send(
+          JSON.stringify({ type: "message:send", id, media, sentAt, replyTo }),
+        );
+        setState((s) => ({
+          ...s,
+          messages: s.messages.map((m) =>
+            m.id === id
+              ? {
+                  ...m,
+                  status: "sent",
+                  image: m.image ? { ...m.image, media } : m.image,
+                }
+              : m,
+          ),
+        }));
+      } catch {
+        markStatus(setState, id, "failed");
+      }
+    },
+    [conversationId, peerUserId, trackUrl],
+  );
+
   const deleteMessages = useCallback(
     (ids: string[]) => {
       if (ids.length === 0) return;
@@ -492,6 +549,7 @@ export function useChat(
     keyReady: key !== null,
     sendText,
     sendImage,
+    sendAudio,
     deleteMessages,
     react,
     setTyping,

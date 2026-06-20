@@ -64,24 +64,16 @@ export async function compressImage(
   return { bytes: new Uint8Array(await blob.arrayBuffer()), mime, width, height };
 }
 
-/**
- * Compress → encrypt → upload. Returns the MediaRef to attach to a message.
- * `persist` decides the storage scope: persisted blobs are kept; ephemeral ones
- * are auto-expired by the R2 lifecycle rule.
- */
-export async function uploadImage(
+/** Encrypt raw bytes with the conversation key and upload the ciphertext to R2. */
+async function uploadEncrypted(
   conversationId: string,
   peerUserId: string,
-  file: File,
+  bytes: Uint8Array,
   persist: boolean,
-): Promise<MediaRef> {
+): Promise<{ id: string; iv: string }> {
   const key = getConversationKey(conversationId);
   if (!key) throw new Error("conversation key unavailable");
-  if (file.size > MAX_IMAGE_BYTES) throw new Error("image too large");
-
-  const { bytes, mime, width, height } = await compressImage(file);
   const { ciphertext, iv } = await encryptBytes(key, bytes);
-
   const token = await conversationTicket(peerUserId);
   const res = await fetch(
     `${mediaBase()}/media?token=${encodeURIComponent(token)}&persist=${persist ? 1 : 0}`,
@@ -89,12 +81,38 @@ export async function uploadImage(
   );
   if (!res.ok) throw new Error("upload failed");
   const { id } = (await res.json()) as { id: string };
-
-  return { id, iv, mime, width, height, size: bytes.length };
+  return { id, iv };
 }
 
-/** Download → decrypt → object URL for display/save. */
-export async function downloadImage(
+/** Compress → encrypt → upload an image. Returns the MediaRef to attach. */
+export async function uploadImage(
+  conversationId: string,
+  peerUserId: string,
+  file: File,
+  persist: boolean,
+): Promise<MediaRef> {
+  if (file.size > MAX_IMAGE_BYTES) throw new Error("image too large");
+  const { bytes, mime, width, height } = await compressImage(file);
+  const { id, iv } = await uploadEncrypted(conversationId, peerUserId, bytes, persist);
+  return { id, iv, mime, width, height, size: bytes.length, kind: "image" };
+}
+
+/** Encrypt → upload a recorded voice clip. Returns the MediaRef to attach. */
+export async function uploadAudio(
+  conversationId: string,
+  peerUserId: string,
+  blob: Blob,
+  mime: string,
+  duration: number,
+  persist: boolean,
+): Promise<MediaRef> {
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  const { id, iv } = await uploadEncrypted(conversationId, peerUserId, bytes, persist);
+  return { id, iv, mime, size: bytes.length, kind: "audio", duration };
+}
+
+/** Download → decrypt → object URL for display/playback/save. */
+export async function downloadMedia(
   conversationId: string,
   peerUserId: string,
   media: MediaRef,

@@ -222,7 +222,8 @@ workaround so the server never sees plaintext.
 - [ ] Light/dark theme toggle; empty-state & loading polish.
 
 ### 🟡 Messaging power features (~a day each)
-- [ ] **Voice messages** — record audio → existing compress→encrypt→R2 pipeline (new media kind).
+- [x] **Voice messages** — record via MediaRecorder → encrypt → R2 (same pipeline as photos,
+      `MediaRef.kind: "audio"`); inline player + download. Mic button in the composer.
 - [ ] **Any-file sharing** (PDFs/docs) — generalize `MediaRef` beyond images.
 - [ ] **Message search** — client-side over decrypted history (stays E2E).
 - [ ] **Edit messages** + "edited" marker.

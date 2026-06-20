@@ -23,6 +23,9 @@ export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
   viewportFit: "cover",
+  // Shrink the layout viewport when the on-screen keyboard opens, so a
+  // full-height chat keeps its composer above the keyboard.
+  interactiveWidget: "resizes-content",
 };
 
 export default function RootLayout({

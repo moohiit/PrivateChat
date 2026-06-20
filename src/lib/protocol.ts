@@ -72,11 +72,13 @@ export type ReceiptState = "delivered" | "read";
  */
 export type MediaRef = {
   id: string; // R2 object id (within the conversation)
-  iv: string; // AES-GCM iv (base64) for the image bytes
-  mime: string; // e.g. "image/webp"
-  width: number;
-  height: number;
+  iv: string; // AES-GCM iv (base64) for the bytes
+  mime: string; // e.g. "image/webp" or "audio/webm"
   size: number; // plaintext byte size (for display)
+  kind?: "image" | "audio"; // defaults to image (back-compat)
+  width?: number; // images
+  height?: number; // images
+  duration?: number; // audio: seconds
 };
 
 /** A persisted message (ciphertext only) stored in DO storage. */
