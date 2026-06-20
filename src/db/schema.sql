@@ -14,6 +14,12 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username_nocase
   ON users (username COLLATE NOCASE);
 
+-- Public profile fields (optional). Like username/public_key these are public
+-- identity data shown to peers — never message content. SQLite has no
+-- "ADD COLUMN IF NOT EXISTS"; the migrator ignores duplicate-column errors.
+ALTER TABLE users ADD COLUMN display_name TEXT;
+ALTER TABLE users ADD COLUMN avatar TEXT;       -- small base64 data URL (webp)
+
 -- Zero-knowledge encrypted key backup: the private key, wrapped client-side with
 -- a PBKDF2(passphrase)->AES-GCM key. The server stores only this ciphertext (it
 -- never has the passphrase), enabling multi-device restore. Security rests on the

@@ -8,6 +8,8 @@ import {
 } from "@/lib/client/useChat";
 import { MAX_IMAGE_BYTES, MAX_FILE_BYTES } from "@/lib/client/media";
 import { startWavRecording, type WavRecorder } from "@/lib/client/recorder";
+import { useProfile } from "@/lib/client/profile";
+import Avatar from "@/components/Avatar";
 import type { Conversation } from "@/lib/protocol";
 
 const DISAPPEAR_OPTIONS = [
@@ -103,6 +105,8 @@ export default function ChatView({
   onBack: () => void;
 }) {
   const { peer, conversationId } = conversation;
+  const peerProfile = useProfile(peer.userId);
+  const peerName = peerProfile?.displayName || peer.username;
   const {
     messages,
     peerOnline,
@@ -320,17 +324,20 @@ export default function ChatView({
             >
               ←
             </button>
+            <Avatar
+              name={peerName}
+              avatar={peerProfile?.avatar}
+              size={36}
+            />
             <div className="min-w-0 flex-1">
-              <p className="identifier truncate text-sm font-medium">
-                @{peer.username}
-              </p>
+              <p className="truncate text-sm font-medium">{peerName}</p>
               <p className="text-xs text-faint">
                 {peerTyping ? (
                   <span className="text-accent">typing…</span>
                 ) : peerOnline ? (
                   "online"
                 ) : (
-                  "offline"
+                  <span className="identifier">@{peer.username}</span>
                 )}
               </p>
             </div>

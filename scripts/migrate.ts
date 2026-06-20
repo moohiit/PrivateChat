@@ -37,8 +37,18 @@ async function main() {
 
   try {
     for (const sql of statements) {
-      await client.execute(sql);
-      console.log("✓", sql.split("\n")[0].slice(0, 60));
+      try {
+        await client.execute(sql);
+        console.log("✓", sql.split("\n")[0].slice(0, 60));
+      } catch (err) {
+        // ALTER TABLE ADD COLUMN isn't idempotent in SQLite; tolerate re-runs.
+        const m = String((err as Error)?.message ?? err);
+        if (/duplicate column name/i.test(m)) {
+          console.log("· skip (exists)", sql.split("\n")[0].slice(0, 50));
+          continue;
+        }
+        throw err;
+      }
     }
     console.log(`\nMigration complete (${statements.length} statements).`);
   } catch (err) {

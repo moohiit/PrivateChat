@@ -8,6 +8,8 @@ import {
   type ConvActivity,
 } from "@/lib/client/lobby";
 import ChatView from "@/components/ChatView";
+import Avatar from "@/components/Avatar";
+import { useProfile } from "@/lib/client/profile";
 import type { Conversation } from "@/lib/protocol";
 
 export default function Dashboard({ selfUserId }: { selfUserId: string }) {
@@ -248,6 +250,33 @@ function RequestsCard() {
   );
 }
 
+function OnlinePeer({
+  userId,
+  username,
+}: {
+  userId: string;
+  username: string;
+}) {
+  const profile = useProfile(userId);
+  const name = profile?.displayName || username;
+  return (
+    <span className="flex min-w-0 items-center gap-2.5">
+      <span className="relative shrink-0">
+        <Avatar name={name} avatar={profile?.avatar} size={32} />
+        <span className="dot dot-live absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-surface-strong bg-accent" />
+      </span>
+      <span className="min-w-0">
+        <span className="block truncate text-sm">{name}</span>
+        {profile?.displayName && (
+          <span className="identifier block truncate text-[0.7rem] text-faint">
+            @{username}
+          </span>
+        )}
+      </span>
+    </span>
+  );
+}
+
 function OnlineCard({ onOpen }: { onOpen: (c: Conversation) => void }) {
   const { online, selfUserId, sentTo, sendRequest, conversations, convoCrypto } =
     useLobby();
@@ -271,12 +300,7 @@ function OnlineCard({ onOpen }: { onOpen: (c: Conversation) => void }) {
                 key={u.userId}
                 className="flex items-center justify-between gap-2 rounded-lg bg-surface-strong px-3 py-2.5"
               >
-                <span className="flex min-w-0 items-center gap-2.5">
-                  <span className="dot dot-live h-2 w-2 shrink-0 rounded-full bg-accent" />
-                  <span className="identifier truncate text-sm">
-                    @{u.username}
-                  </span>
-                </span>
+                <OnlinePeer userId={u.userId} username={u.username} />
                 {convo ? (
                   <button
                     onClick={() => onOpen(convo)}
@@ -336,6 +360,7 @@ function ConversationsCard({ onOpen }: { onOpen: (c: Conversation) => void }) {
           {sorted.map((c) => (
             <ConversationRow
               key={c.conversationId}
+              userId={c.peer.userId}
               username={c.peer.username}
               crypto={convoCrypto[c.conversationId]}
               online={onlineIds.has(c.peer.userId)}
@@ -357,12 +382,14 @@ const CRYPTO_LABEL: Record<string, { text: string; color: string }> = {
 };
 
 function ConversationRow({
+  userId,
   username,
   crypto,
   online,
   activity,
   onOpen,
 }: {
+  userId: string;
   username: string;
   crypto?: { status: string; safetyNumber?: string };
   online: boolean;
@@ -370,6 +397,8 @@ function ConversationRow({
   onOpen: () => void;
 }) {
   const [open, setOpen] = useState(false);
+  const profile = useProfile(userId);
+  const name = profile?.displayName || username;
   const status = crypto?.status ?? "deriving";
   const badge = CRYPTO_LABEL[status] ?? CRYPTO_LABEL.deriving;
   const unread = activity?.unread ?? 0;
@@ -386,14 +415,22 @@ function ConversationRow({
   return (
     <li className="rounded-lg bg-surface-strong px-3 py-2.5">
       <div className="flex items-center justify-between gap-3">
-        <span className="flex min-w-0 flex-1 items-start gap-2.5">
-          <ShieldGlyph color={badge.color} />
+        <span className="flex min-w-0 flex-1 items-center gap-2.5">
+          <span className="relative shrink-0">
+            <Avatar name={name} avatar={profile?.avatar} size={38} />
+            <span
+              className="absolute -bottom-0.5 -right-0.5 grid h-4 w-4 place-items-center rounded-full bg-surface-strong"
+              title={badge.text}
+            >
+              <ShieldGlyph color={badge.color} />
+            </span>
+          </span>
           <span className="min-w-0 flex-1">
             <span className="flex items-center gap-2">
               <span
-                className={`identifier truncate text-sm ${unread > 0 ? "font-semibold" : ""}`}
+                className={`truncate text-sm ${unread > 0 ? "font-semibold" : ""}`}
               >
-                @{username}
+                {name}
               </span>
               {online && (
                 <span
@@ -453,10 +490,10 @@ function ShieldGlyph({ color }: { color: string }) {
   return (
     <svg
       viewBox="0 0 24 24"
-      className="h-4 w-4 shrink-0"
+      className="h-2.5 w-2.5 shrink-0"
       fill="none"
       stroke={color}
-      strokeWidth={2}
+      strokeWidth={2.5}
       strokeLinecap="round"
       strokeLinejoin="round"
       aria-hidden

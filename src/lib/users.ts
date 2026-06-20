@@ -11,16 +11,53 @@ export type UserRow = {
   public_key: string;
   pwd_hash: string;
   created_at: number;
+  display_name: string | null;
+  avatar: string | null;
 };
 
 export type PublicUser = {
   userId: string;
   username: string;
   publicKey: string;
+  displayName: string | null;
+  avatar: string | null;
+};
+
+/** Public profile fields shown to peers (no key material). */
+export type Profile = {
+  userId: string;
+  username: string;
+  displayName: string | null;
+  avatar: string | null;
 };
 
 export function toPublicUser(row: UserRow): PublicUser {
-  return { userId: row.id, username: row.username, publicKey: row.public_key };
+  return {
+    userId: row.id,
+    username: row.username,
+    publicKey: row.public_key,
+    displayName: row.display_name ?? null,
+    avatar: row.avatar ?? null,
+  };
+}
+
+export function toProfile(row: UserRow): Profile {
+  return {
+    userId: row.id,
+    username: row.username,
+    displayName: row.display_name ?? null,
+    avatar: row.avatar ?? null,
+  };
+}
+
+export async function updateProfile(
+  userId: string,
+  input: { displayName: string | null; avatar: string | null },
+): Promise<void> {
+  await db.execute({
+    sql: "UPDATE users SET display_name = ?, avatar = ? WHERE id = ?",
+    args: [input.displayName, input.avatar, userId],
+  });
 }
 
 export async function getUserByUsername(username: string): Promise<UserRow | null> {

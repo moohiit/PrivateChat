@@ -2,6 +2,7 @@ import Link from "next/link";
 import { getSession } from "@/lib/session";
 import Brand from "@/components/Brand";
 import LogoutButton from "@/components/LogoutButton";
+import ProfileButton from "@/components/ProfileButton";
 import Dashboard from "@/components/Dashboard";
 import UnlockGate from "@/components/UnlockGate";
 
@@ -22,12 +23,10 @@ export default async function Home() {
           <div className="mx-auto flex w-full max-w-3xl items-center justify-between gap-3 px-4 py-3 sm:px-6">
             <Brand size="sm" />
             <div className="flex items-center gap-3">
-              <span className="hidden text-sm text-muted sm:inline">
-                signed in as{" "}
-                <span className="identifier text-foreground">
-                  @{session.username}
-                </span>
-              </span>
+              <ProfileButton
+                userId={session.userId}
+                username={session.username}
+              />
               <LogoutButton />
             </div>
           </div>
