@@ -686,6 +686,132 @@ function Bubble({
   );
 }
 
+function AudioPlayer({
+  url,
+  duration,
+  mine,
+  onDownload,
+}: {
+  url: string;
+  duration?: number;
+  mine: boolean;
+  onDownload: () => void;
+}) {
+  const ref = useRef<HTMLAudioElement>(null);
+  const [playing, setPlaying] = useState(false);
+  const [cur, setCur] = useState(0);
+  const [total, setTotal] = useState(duration ?? 0);
+
+  useEffect(() => {
+    const a = ref.current;
+    if (!a) return;
+    let hacked = false;
+    const onMeta = () => {
+      // MediaRecorder WebM has no duration -> force the browser to compute it.
+      if (a.duration === Infinity) {
+        hacked = true;
+        a.currentTime = 1e101;
+      } else if (isFinite(a.duration) && a.duration > 0) {
+        setTotal(a.duration);
+      }
+    };
+    const onDur = () => {
+      if (isFinite(a.duration) && a.duration > 0) {
+        setTotal(a.duration);
+        if (hacked) {
+          a.currentTime = 0;
+          hacked = false;
+        }
+      }
+    };
+    const onTime = () => setCur(a.currentTime);
+    const onEnd = () => {
+      setPlaying(false);
+      setCur(0);
+    };
+    const onPlay = () => setPlaying(true);
+    const onPause = () => setPlaying(false);
+    a.addEventListener("loadedmetadata", onMeta);
+    a.addEventListener("durationchange", onDur);
+    a.addEventListener("timeupdate", onTime);
+    a.addEventListener("ended", onEnd);
+    a.addEventListener("play", onPlay);
+    a.addEventListener("pause", onPause);
+    return () => {
+      a.removeEventListener("loadedmetadata", onMeta);
+      a.removeEventListener("durationchange", onDur);
+      a.removeEventListener("timeupdate", onTime);
+      a.removeEventListener("ended", onEnd);
+      a.removeEventListener("play", onPlay);
+      a.removeEventListener("pause", onPause);
+    };
+  }, [url]);
+
+  function toggle(e: React.MouseEvent) {
+    e.stopPropagation();
+    const a = ref.current;
+    if (!a) return;
+    if (a.paused) void a.play().catch(() => {});
+    else a.pause();
+  }
+  function seek(e: React.MouseEvent) {
+    e.stopPropagation();
+    const a = ref.current;
+    if (!a || !total) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const ratio = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
+    a.currentTime = ratio * total;
+    setCur(a.currentTime);
+  }
+
+  const pct = total ? Math.min(100, (cur / total) * 100) : 0;
+  const sub = mine ? "text-accent-ink/70" : "text-faint";
+
+  return (
+    <div
+      className="flex items-center gap-2 px-3 py-2.5"
+      onClick={(e) => e.stopPropagation()}
+    >
+      <audio ref={ref} src={url} preload="metadata" className="hidden" />
+      <button
+        type="button"
+        onClick={toggle}
+        aria-label={playing ? "Pause" : "Play"}
+        className={`grid h-8 w-8 shrink-0 place-items-center rounded-full text-sm ${
+          mine ? "bg-accent-ink/15 text-accent-ink" : "bg-foreground/10 text-foreground"
+        }`}
+      >
+        {playing ? "⏸" : "▶"}
+      </button>
+      <div
+        onClick={seek}
+        className={`h-1.5 w-24 shrink-0 cursor-pointer rounded-full sm:w-32 ${
+          mine ? "bg-accent-ink/20" : "bg-foreground/15"
+        }`}
+      >
+        <div
+          className={`h-full rounded-full ${mine ? "bg-accent-ink" : "bg-accent"}`}
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+      <span className={`shrink-0 text-[0.65rem] tabular-nums ${sub}`}>
+        {fmtDuration(Math.round(cur))}/{fmtDuration(Math.round(total))}
+      </span>
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          onDownload();
+        }}
+        aria-label="Download voice message"
+        className={`shrink-0 text-sm ${sub}`}
+      >
+        ↓
+      </button>
+    </div>
+  );
+}
+
 function MediaBlock({
   media,
   mine,
@@ -724,25 +850,12 @@ function MediaBlock({
 
   if (isAudio) {
     return (
-      <div className="flex items-center gap-2 px-3 py-2">
-        <audio
-          src={media.url ?? ""}
-          controls
-          className="h-9 max-w-[14rem]"
-          onClick={(e) => e.stopPropagation()}
-        />
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            onDownload();
-          }}
-          aria-label="Download voice message"
-          className={`shrink-0 text-sm ${mine ? "text-accent-ink/70" : "text-faint"} hover:opacity-100`}
-        >
-          ↓
-        </button>
-      </div>
+      <AudioPlayer
+        url={media.url ?? ""}
+        duration={media.media?.duration}
+        mine={mine}
+        onDownload={onDownload}
+      />
     );
   }
 
