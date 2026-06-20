@@ -9,6 +9,13 @@ import {
 import { MAX_IMAGE_BYTES } from "@/lib/client/media";
 import type { Conversation } from "@/lib/protocol";
 
+const DISAPPEAR_OPTIONS = [
+  { ttl: 0, label: "Off" },
+  { ttl: 3_600_000, label: "1h" },
+  { ttl: 86_400_000, label: "24h" },
+  { ttl: 604_800_000, label: "7d" },
+];
+
 export default function ChatView({
   conversation,
   selfUserId,
@@ -26,11 +33,13 @@ export default function ChatView({
     keyReady,
     persistMine,
     persistEffective,
+    disappearTtl,
     sendText,
     sendImage,
     deleteMessages,
     setTyping,
     setPersist,
+    setDisappear,
     clearHistory,
   } = useChat(conversationId, peer.userId, selfUserId);
 
@@ -184,6 +193,31 @@ export default function ChatView({
         >
           Clear history
         </button>
+      </div>
+
+      {/* Disappearing messages */}
+      <div className="flex items-center justify-between gap-2 border-b border-border-soft px-4 py-2">
+        <span className="flex items-center gap-1.5 text-xs text-muted">
+          <span aria-hidden>⏱</span>
+          <span>Disappearing</span>
+        </span>
+        <div className="flex items-center gap-1">
+          {DISAPPEAR_OPTIONS.map((opt) => (
+            <button
+              key={opt.ttl}
+              onClick={() => setDisappear(opt.ttl)}
+              disabled={!keyReady}
+              aria-pressed={disappearTtl === opt.ttl}
+              className={`rounded-md px-2 py-1 text-xs disabled:opacity-40 ${
+                disappearTtl === opt.ttl
+                  ? "bg-accent font-semibold text-accent-ink"
+                  : "btn-ghost"
+              }`}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
       </div>
 
       {error && (
@@ -347,6 +381,11 @@ function Bubble({
               m.mine ? "text-accent-ink/70" : "text-faint"
             }`}
           >
+            {m.expiresAt && (
+              <span aria-label="disappearing message" title="disappearing">
+                ⏱
+              </span>
+            )}
             {formatTime(m.sentAt)}
             {m.mine && <StatusTick status={m.status} />}
           </span>

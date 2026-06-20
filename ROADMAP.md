@@ -212,7 +212,10 @@ workaround so the server never sees plaintext.
       sorts by recent + shows a total-unread badge. Verified by `scripts/unread-check.ts` (7/7).
 - [ ] Emoji **reactions** to messages (small protocol add; reuses relay).
 - [ ] **Reply / quote** a message.
-- [ ] **Disappearing messages** — per-conversation TTL (reuse delete + R2-expiry machinery).
+- [x] **Disappearing messages** — per-conversation TTL (off/1h/24h/7d, either member sets it).
+      Server stamps `expiresAt`; a Durable Object **alarm** sweeps expired messages (history
+      rows + R2 blobs) and broadcasts deletion; clients also expire locally via timers.
+      Verified by `scripts/disappear-check.ts` (5/5, incl. the alarm sweep).
 - [ ] **Safety-number change alert** — warn + re-verify if a peer's public key changes (anti key-swap).
 - [ ] Light/dark theme toggle; empty-state & loading polish.
 

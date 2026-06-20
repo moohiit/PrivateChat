@@ -31,8 +31,13 @@ const MAX_CIPHERTEXT = 131_072;
 
 const PREFS_KEY = "meta:prefs";
 const MEMBERS_KEY = "meta:members";
+const DISAPPEAR_KEY = "meta:disappear";
 const MSG_PREFIX = "msg:";
+const EXP_PREFIX = "exp:"; // exp:<paddedExpiresAt>:<id> -> ExpRecord
 const MAX_HISTORY = 500;
+
+/** A scheduled message expiry (disappearing messages). */
+type ExpRecord = { id: string; mediaId?: string; msgKey?: string };
 
 export class ConversationServer extends Server<Env> {
   /** userId -> connection ids (one user may have multiple tabs/devices) */
@@ -42,6 +47,8 @@ export class ConversationServer extends Server<Env> {
   private prefs: Record<string, boolean> = {};
   /** the two member userIds (durable) */
   private pair: string[] = [];
+  /** disappearing-messages TTL in ms (0 = off), shared by the conversation */
+  private disappearTtl = 0;
   private loaded = false;
 
   private async ensureLoaded() {
@@ -49,6 +56,8 @@ export class ConversationServer extends Server<Env> {
     this.prefs =
       (await this.ctx.storage.get<Record<string, boolean>>(PREFS_KEY)) ?? {};
     this.pair = (await this.ctx.storage.get<string[]>(MEMBERS_KEY)) ?? [];
+    this.disappearTtl =
+      (await this.ctx.storage.get<number>(DISAPPEAR_KEY)) ?? 0;
     this.loaded = true;
   }
 
@@ -97,6 +106,7 @@ export class ConversationServer extends Server<Env> {
       mine: this.prefs[userId] === true,
       effective: this.effectivePersist(),
     });
+    this.send(connection, { type: "disappear:state", ttl: this.disappearTtl });
     const history = await this.loadHistory();
     this.send(connection, { type: "history", messages: history });
 
@@ -130,6 +140,9 @@ export class ConversationServer extends Server<Env> {
         if (hasText && (msg.ciphertext!.length > MAX_CIPHERTEXT || typeof msg.iv !== "string")) {
           return;
         }
+        const expiresAt =
+          this.disappearTtl > 0 ? Date.now() + this.disappearTtl : undefined;
+
         this.broadcastExcept(connection.id, {
           type: "message:relay",
           id: msg.id,
@@ -138,7 +151,10 @@ export class ConversationServer extends Server<Env> {
           iv: msg.iv,
           media: msg.media,
           sentAt: msg.sentAt,
+          expiresAt,
         });
+
+        let msgKey: string | undefined;
         if (this.effectivePersist()) {
           const stored: StoredMessage = {
             id: msg.id,
@@ -147,8 +163,17 @@ export class ConversationServer extends Server<Env> {
             iv: msg.iv,
             media: msg.media,
             sentAt: msg.sentAt,
+            expiresAt,
           };
-          await this.ctx.storage.put(this.msgKey(stored), stored);
+          msgKey = this.msgKey(stored);
+          await this.ctx.storage.put(msgKey, stored);
+        }
+        if (expiresAt) {
+          await this.scheduleExpiry(expiresAt, {
+            id: msg.id,
+            mediaId: msg.media?.id,
+            msgKey,
+          });
         }
         // Update the conversation list (unread + preview) via the lobby.
         await this.notifyLobbyActivity(me, {
@@ -180,6 +205,19 @@ export class ConversationServer extends Server<Env> {
         await this.ctx.storage.put(PREFS_KEY, this.prefs);
         this.broadcastPersistState();
         return;
+      case "disappear:set": {
+        // Either member may set the conversation's disappearing timer.
+        // Any positive ttl is accepted, capped at 7 days (UI offers presets).
+        const MAX_TTL = 604_800_000;
+        const ttl =
+          typeof msg.ttl === "number" && msg.ttl > 0
+            ? Math.min(Math.floor(msg.ttl), MAX_TTL)
+            : 0;
+        this.disappearTtl = ttl;
+        await this.ctx.storage.put(DISAPPEAR_KEY, ttl);
+        this.broadcastAll({ type: "disappear:state", ttl });
+        return;
+      }
       case "history:clear":
         await this.clearHistory();
         this.broadcastAll({ type: "history:cleared" });
@@ -193,6 +231,48 @@ export class ConversationServer extends Server<Env> {
 
   async onError(connection: Connection) {
     this.handleLeave(connection);
+  }
+
+  /* ------------------------ disappearing messages ------------------------ */
+
+  private expKey(expiresAt: number, id: string): string {
+    return `${EXP_PREFIX}${String(expiresAt).padStart(16, "0")}:${id}`;
+  }
+
+  private async scheduleExpiry(expiresAt: number, rec: ExpRecord): Promise<void> {
+    await this.ctx.storage.put(this.expKey(expiresAt, rec.id), rec);
+    const current = await this.ctx.storage.getAlarm();
+    if (current === null || expiresAt < current) {
+      await this.ctx.storage.setAlarm(expiresAt);
+    }
+  }
+
+  /** DO alarm: delete messages whose timer elapsed (history + R2), notify, reschedule. */
+  async onAlarm(): Promise<void> {
+    await this.ensureLoaded();
+    const now = Date.now();
+    const entries = await this.ctx.storage.list<ExpRecord>({ prefix: EXP_PREFIX });
+    const ids: string[] = [];
+    const ops: Promise<unknown>[] = [];
+    let nextAt: number | null = null;
+
+    for (const [k, rec] of entries) {
+      const expiresAt = Number(k.slice(EXP_PREFIX.length, EXP_PREFIX.length + 16));
+      if (expiresAt <= now) {
+        ids.push(rec.id);
+        ops.push(this.ctx.storage.delete(k));
+        if (rec.msgKey) ops.push(this.ctx.storage.delete(rec.msgKey));
+        if (rec.mediaId) {
+          ops.push(this.env.MEDIA.delete(this.mediaKey(rec.mediaId)));
+        }
+      } else {
+        nextAt = nextAt === null ? expiresAt : Math.min(nextAt, expiresAt);
+      }
+    }
+
+    await Promise.all(ops);
+    if (ids.length) this.broadcastAll({ type: "messages:deleted", ids });
+    if (nextAt !== null) await this.ctx.storage.setAlarm(nextAt);
   }
 
   /* ----------------------------- persistence ----------------------------- */

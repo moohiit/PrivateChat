@@ -87,6 +87,7 @@ export type StoredMessage = {
   iv?: string;
   media?: MediaRef; // optional image
   sentAt: number;
+  expiresAt?: number; // disappearing messages: epoch ms when it auto-deletes
 };
 
 /** An item to delete: message id + its media id (so the blob can be removed). */
@@ -106,6 +107,7 @@ export type ChatClientMessage =
   | { type: "typing"; on: boolean }
   | { type: "persist:set"; on: boolean }
   | { type: "message:delete"; items: DeleteItem[] }
+  | { type: "disappear:set"; ttl: number } // ttl ms; 0 = off
   | { type: "history:clear" };
 
 /** Conversation room: messages the server pushes. */
@@ -118,11 +120,13 @@ export type ChatServerMessage =
       iv?: string;
       media?: MediaRef;
       sentAt: number;
+      expiresAt?: number;
     }
   | { type: "receipt"; id: string; state: ReceiptState }
   | { type: "peer:typing"; on: boolean }
   | { type: "peer:presence"; online: boolean }
   | { type: "persist:state"; mine: boolean; effective: boolean }
+  | { type: "disappear:state"; ttl: number }
   | { type: "history"; messages: StoredMessage[] }
   | { type: "messages:deleted"; ids: string[] }
   | { type: "history:cleared" };

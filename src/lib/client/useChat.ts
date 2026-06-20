@@ -27,6 +27,7 @@ export type ChatMessage = {
   sentAt: number;
   status: MessageStatus;
   image?: ChatImage;
+  expiresAt?: number;
 };
 
 export type ChatState = {
@@ -36,6 +37,7 @@ export type ChatState = {
   keyReady: boolean;
   persistMine: boolean;
   persistEffective: boolean;
+  disappearTtl: number;
 };
 
 const RANK: Record<ReceiptState, number> = { delivered: 1, read: 2 };
@@ -62,6 +64,7 @@ export function useChat(
     keyReady: getConversationKey(conversationId) !== null,
     persistMine: false,
     persistEffective: false,
+    disappearTtl: 0,
   });
   const socketRef = useRef<ReturnType<typeof createConversationSocket> | null>(
     null,
@@ -71,6 +74,10 @@ export function useChat(
   const objectUrls = useRef<Set<string>>(new Set());
   const messagesRef = useRef<ChatMessage[]>([]);
   const persistRef = useRef(false);
+  const disappearRef = useRef(0);
+  const expiryTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(
+    new Map(),
+  );
 
   const key = getConversationKey(conversationId);
 
@@ -97,6 +104,42 @@ export function useChat(
       }
     }
   }, []);
+
+  // Remove messages locally (revoke image URLs + clear any expiry timers).
+  const removeMessages = useCallback(
+    (ids: Iterable<string>) => {
+      const idSet = new Set(ids);
+      for (const id of idSet) {
+        const t = expiryTimers.current.get(id);
+        if (t) {
+          clearTimeout(t);
+          expiryTimers.current.delete(id);
+        }
+      }
+      setState((s) => {
+        revokeFor(s.messages.filter((m) => idSet.has(m.id)));
+        return { ...s, messages: s.messages.filter((m) => !idSet.has(m.id)) };
+      });
+    },
+    [revokeFor],
+  );
+
+  // Disappearing messages: locally remove a message when its timer elapses.
+  const scheduleLocalExpiry = useCallback(
+    (id: string, expiresAt?: number) => {
+      if (!expiresAt || expiryTimers.current.has(id)) return;
+      const delay = expiresAt - Date.now();
+      if (delay <= 0) {
+        removeMessages([id]);
+        return;
+      }
+      expiryTimers.current.set(
+        id,
+        setTimeout(() => removeMessages([id]), delay),
+      );
+    },
+    [removeMessages],
+  );
 
   // Download + decrypt an image and attach its object URL to the message.
   const hydrateImage = useCallback(
@@ -163,6 +206,7 @@ export function useChat(
               text,
               sentAt: msg.sentAt,
               status: "read",
+              expiresAt: msg.expiresAt,
               image: msg.media
                 ? { media: msg.media, url: null, status: "loading" }
                 : undefined,
@@ -175,6 +219,7 @@ export function useChat(
             };
           });
           if (msg.media) void hydrateImage(msg.id, msg.media);
+          scheduleLocalExpiry(msg.id, msg.expiresAt);
           send({ type: "receipt", id: msg.id, state: "delivered" });
           send({ type: "receipt", id: msg.id, state: "read" });
           return;
@@ -203,14 +248,13 @@ export function useChat(
             persistEffective: msg.effective,
           }));
           return;
-        case "messages:deleted": {
-          const ids = new Set(msg.ids);
-          setState((s) => {
-            revokeFor(s.messages.filter((m) => ids.has(m.id)));
-            return { ...s, messages: s.messages.filter((m) => !ids.has(m.id)) };
-          });
+        case "disappear:state":
+          disappearRef.current = msg.ttl;
+          setState((s) => ({ ...s, disappearTtl: msg.ttl }));
           return;
-        }
+        case "messages:deleted":
+          removeMessages(msg.ids);
+          return;
         case "history": {
           const decrypted: ChatMessage[] = [];
           for (const m of msg.messages) {
@@ -231,6 +275,7 @@ export function useChat(
               text,
               sentAt: m.sentAt,
               status: "read",
+              expiresAt: m.expiresAt,
               image: m.media
                 ? { media: m.media, url: null, status: "loading" }
                 : undefined,
@@ -239,6 +284,7 @@ export function useChat(
           setState((s) => ({ ...s, messages: mergeById(s.messages, decrypted) }));
           for (const m of msg.messages) {
             if (m.media) void hydrateImage(m.id, m.media);
+            scheduleLocalExpiry(m.id, m.expiresAt);
           }
           return;
         }
@@ -253,12 +299,15 @@ export function useChat(
 
     socket.addEventListener("message", onMessage);
     const urls = objectUrls.current;
+    const timers = expiryTimers.current;
     return () => {
       socket.removeEventListener("message", onMessage);
       socket.close();
       socketRef.current = null;
       for (const url of urls) URL.revokeObjectURL(url);
       urls.clear();
+      for (const t of timers.values()) clearTimeout(t);
+      timers.clear();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [conversationId, peerUserId]);
@@ -269,14 +318,18 @@ export function useChat(
       if (!trimmed) return;
       const id = randomId();
       const sentAt = Date.now();
+      const expiresAt =
+        disappearRef.current > 0 ? sentAt + disappearRef.current : undefined;
       const optimistic: ChatMessage = {
         id,
         mine: true,
         text: trimmed,
         sentAt,
         status: "sending",
+        expiresAt,
       };
       setState((s) => ({ ...s, messages: [...s.messages, optimistic] }));
+      scheduleLocalExpiry(id, expiresAt);
 
       try {
         if (!key) throw new Error("no key");
@@ -296,6 +349,8 @@ export function useChat(
     async (file: File) => {
       const id = randomId();
       const sentAt = Date.now();
+      const expiresAt =
+        disappearRef.current > 0 ? sentAt + disappearRef.current : undefined;
       const localUrl = trackUrl(URL.createObjectURL(file));
       const optimistic: ChatMessage = {
         id,
@@ -303,9 +358,11 @@ export function useChat(
         text: "",
         sentAt,
         status: "sending",
+        expiresAt,
         image: { url: localUrl, status: "ready" },
       };
       setState((s) => ({ ...s, messages: [...s.messages, optimistic] }));
+      scheduleLocalExpiry(id, expiresAt);
 
       try {
         const media = await uploadImage(
@@ -336,20 +393,19 @@ export function useChat(
     [conversationId, peerUserId, trackUrl],
   );
 
-  const deleteMessages = useCallback((ids: string[]) => {
-    if (ids.length === 0) return;
-    const idSet = new Set(ids);
-    const items: DeleteItem[] = ids.map((id) => {
-      const m = messagesRef.current.find((x) => x.id === id);
-      return { id, mediaId: m?.image?.media?.id };
-    });
-    socketRef.current?.send(JSON.stringify({ type: "message:delete", items }));
-    // Optimistic local removal (server also broadcasts messages:deleted).
-    setState((s) => {
-      revokeFor(s.messages.filter((m) => idSet.has(m.id)));
-      return { ...s, messages: s.messages.filter((m) => !idSet.has(m.id)) };
-    });
-  }, [revokeFor]);
+  const deleteMessages = useCallback(
+    (ids: string[]) => {
+      if (ids.length === 0) return;
+      const items: DeleteItem[] = ids.map((id) => {
+        const m = messagesRef.current.find((x) => x.id === id);
+        return { id, mediaId: m?.image?.media?.id };
+      });
+      socketRef.current?.send(JSON.stringify({ type: "message:delete", items }));
+      // Optimistic local removal (server also broadcasts messages:deleted).
+      removeMessages(ids);
+    },
+    [removeMessages],
+  );
 
   const setTyping = useCallback((on: boolean) => {
     const socket = socketRef.current;
@@ -375,6 +431,10 @@ export function useChat(
     socketRef.current?.send(JSON.stringify({ type: "history:clear" }));
   }, []);
 
+  const setDisappear = useCallback((ttl: number) => {
+    socketRef.current?.send(JSON.stringify({ type: "disappear:set", ttl }));
+  }, []);
+
   return {
     ...state,
     keyReady: key !== null,
@@ -383,6 +443,7 @@ export function useChat(
     deleteMessages,
     setTyping,
     setPersist,
+    setDisappear,
     clearHistory,
   };
 }
