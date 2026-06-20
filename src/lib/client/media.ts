@@ -30,6 +30,7 @@ async function conversationTicket(peerUserId: string): Promise<string> {
 }
 
 export const MAX_IMAGE_BYTES = 25 * 1024 * 1024; // reject huge originals
+export const MAX_FILE_BYTES = 7 * 1024 * 1024; // fits the Worker's 8 MB upload cap
 
 /** Compress an image to a bounded size using a canvas (WebP, quality 0.82). */
 export async function compressImage(
@@ -95,6 +96,26 @@ export async function uploadImage(
   const { bytes, mime, width, height } = await compressImage(file);
   const { id, iv } = await uploadEncrypted(conversationId, peerUserId, bytes, persist);
   return { id, iv, mime, width, height, size: bytes.length, kind: "image" };
+}
+
+/** Encrypt → upload an arbitrary file (no compression). Returns the MediaRef. */
+export async function uploadFile(
+  conversationId: string,
+  peerUserId: string,
+  file: File,
+  persist: boolean,
+): Promise<MediaRef> {
+  if (file.size > MAX_FILE_BYTES) throw new Error("file too large");
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const { id, iv } = await uploadEncrypted(conversationId, peerUserId, bytes, persist);
+  return {
+    id,
+    iv,
+    mime: file.type || "application/octet-stream",
+    size: bytes.length,
+    kind: "file",
+    name: file.name,
+  };
 }
 
 /** Encrypt → upload a recorded voice clip. Returns the MediaRef to attach. */

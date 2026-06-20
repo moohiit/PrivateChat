@@ -6,7 +6,7 @@ import {
   type ChatMessage,
   type MessageStatus,
 } from "@/lib/client/useChat";
-import { MAX_IMAGE_BYTES } from "@/lib/client/media";
+import { MAX_IMAGE_BYTES, MAX_FILE_BYTES } from "@/lib/client/media";
 import type { Conversation } from "@/lib/protocol";
 
 const DISAPPEAR_OPTIONS = [
@@ -26,9 +26,17 @@ const AUDIO_MIME_CANDIDATES = [
 ];
 
 function mediaLabel(m: ChatMessage): string {
-  if (m.image?.media?.kind === "audio") return "🎤 Voice message";
+  const k = m.image?.media?.kind;
+  if (k === "audio") return "🎤 Voice message";
+  if (k === "file") return `📎 ${m.image?.media?.name ?? "File"}`;
   if (m.image) return "📷 Photo";
   return "message";
+}
+
+function fmtBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 export default function ChatView({
@@ -52,6 +60,7 @@ export default function ChatView({
     sendText,
     sendImage,
     sendAudio,
+    sendFile,
     deleteMessages,
     react,
     setTyping,
@@ -69,6 +78,7 @@ export default function ChatView({
   const [recSecs, setRecSecs] = useState(0);
   const scrollRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const docRef = useRef<HTMLInputElement>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const streamRef = useRef<MediaStream | null>(null);
@@ -179,6 +189,22 @@ export default function ChatView({
         continue;
       }
       void sendImage(f, used ? undefined : rid);
+      used = true;
+    }
+    if (used) setReplyTo(null);
+  }
+
+  function onPickDocs(e: React.ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(e.target.files ?? []);
+    e.target.value = "";
+    const rid = replyTo?.id;
+    let used = false;
+    for (const f of files) {
+      if (f.size > MAX_FILE_BYTES) {
+        setError("File is too large (max 7 MB).");
+        continue;
+      }
+      void sendFile(f, used ? undefined : rid);
       used = true;
     }
     if (used) setReplyTo(null);
@@ -447,6 +473,13 @@ export default function ChatView({
             onChange={onPickFiles}
             className="hidden"
           />
+          <input
+            ref={docRef}
+            type="file"
+            multiple
+            onChange={onPickDocs}
+            className="hidden"
+          />
           <button
             type="button"
             onClick={() => fileRef.current?.click()}
@@ -455,6 +488,15 @@ export default function ChatView({
             className="btn-ghost grid h-10 w-10 shrink-0 place-items-center rounded-[0.625rem] text-base disabled:opacity-50"
           >
             🖼
+          </button>
+          <button
+            type="button"
+            onClick={() => docRef.current?.click()}
+            disabled={!keyReady}
+            aria-label="Attach file"
+            className="btn-ghost grid h-10 w-10 shrink-0 place-items-center rounded-[0.625rem] text-base disabled:opacity-50"
+          >
+            📎
           </button>
           <input
             value={draft}
@@ -525,11 +567,18 @@ function Bubble({
 
   function download() {
     if (!m.image?.url) return;
-    const mime = m.image.media?.mime ?? "image/webp";
-    const ext = (mime.split("/")[1] ?? "bin").split(";")[0];
+    const md = m.image.media;
+    let filename: string;
+    if (md?.kind === "file" && md.name) {
+      filename = md.name;
+    } else {
+      const mime = md?.mime ?? "image/webp";
+      const ext = (mime.split("/")[1] ?? "bin").split(";")[0];
+      filename = `privatechat-${m.id.slice(0, 8)}.${ext}`;
+    }
     const a = document.createElement("a");
     a.href = m.image.url;
-    a.download = `privatechat-${m.id.slice(0, 8)}.${ext}`;
+    a.download = filename;
     document.body.appendChild(a);
     a.click();
     a.remove();
@@ -701,28 +750,16 @@ function AudioPlayer({
   const [playing, setPlaying] = useState(false);
   const [cur, setCur] = useState(0);
   const [total, setTotal] = useState(duration ?? 0);
+  const [error, setError] = useState(false);
 
   useEffect(() => {
     const a = ref.current;
     if (!a) return;
-    let hacked = false;
+    // Use the element's duration only when it's known/finite; otherwise keep the
+    // duration we recorded (MediaRecorder WebM reports Infinity). No seek hacks —
+    // they can park the element at the end and break playback.
     const onMeta = () => {
-      // MediaRecorder WebM has no duration -> force the browser to compute it.
-      if (a.duration === Infinity) {
-        hacked = true;
-        a.currentTime = 1e101;
-      } else if (isFinite(a.duration) && a.duration > 0) {
-        setTotal(a.duration);
-      }
-    };
-    const onDur = () => {
-      if (isFinite(a.duration) && a.duration > 0) {
-        setTotal(a.duration);
-        if (hacked) {
-          a.currentTime = 0;
-          hacked = false;
-        }
-      }
+      if (isFinite(a.duration) && a.duration > 0) setTotal(a.duration);
     };
     const onTime = () => setCur(a.currentTime);
     const onEnd = () => {
@@ -732,14 +769,14 @@ function AudioPlayer({
     const onPlay = () => setPlaying(true);
     const onPause = () => setPlaying(false);
     a.addEventListener("loadedmetadata", onMeta);
-    a.addEventListener("durationchange", onDur);
+    a.addEventListener("durationchange", onMeta);
     a.addEventListener("timeupdate", onTime);
     a.addEventListener("ended", onEnd);
     a.addEventListener("play", onPlay);
     a.addEventListener("pause", onPause);
     return () => {
       a.removeEventListener("loadedmetadata", onMeta);
-      a.removeEventListener("durationchange", onDur);
+      a.removeEventListener("durationchange", onMeta);
       a.removeEventListener("timeupdate", onTime);
       a.removeEventListener("ended", onEnd);
       a.removeEventListener("play", onPlay);
@@ -751,8 +788,11 @@ function AudioPlayer({
     e.stopPropagation();
     const a = ref.current;
     if (!a) return;
-    if (a.paused) void a.play().catch(() => {});
-    else a.pause();
+    if (a.paused) {
+      a.play().catch(() => setError(true));
+    } else {
+      a.pause();
+    }
   }
   function seek(e: React.MouseEvent) {
     e.stopPropagation();
@@ -772,16 +812,24 @@ function AudioPlayer({
       className="flex items-center gap-2 px-3 py-2.5"
       onClick={(e) => e.stopPropagation()}
     >
-      <audio ref={ref} src={url} preload="metadata" className="hidden" />
+      <audio
+        ref={ref}
+        src={url}
+        preload="metadata"
+        playsInline
+        onError={() => setError(true)}
+        style={{ position: "absolute", width: 1, height: 1, opacity: 0 }}
+      />
       <button
         type="button"
         onClick={toggle}
+        disabled={error}
         aria-label={playing ? "Pause" : "Play"}
-        className={`grid h-8 w-8 shrink-0 place-items-center rounded-full text-sm ${
+        className={`grid h-8 w-8 shrink-0 place-items-center rounded-full text-sm disabled:opacity-50 ${
           mine ? "bg-accent-ink/15 text-accent-ink" : "bg-foreground/10 text-foreground"
         }`}
       >
-        {playing ? "⏸" : "▶"}
+        {error ? "⚠" : playing ? "⏸" : "▶"}
       </button>
       <div
         onClick={seek}
@@ -795,7 +843,9 @@ function AudioPlayer({
         />
       </div>
       <span className={`shrink-0 text-[0.65rem] tabular-nums ${sub}`}>
-        {fmtDuration(Math.round(cur))}/{fmtDuration(Math.round(total))}
+        {error
+          ? "tap ↓"
+          : `${fmtDuration(Math.round(cur))}/${fmtDuration(Math.round(total))}`}
       </span>
       <button
         type="button"
@@ -823,6 +873,46 @@ function MediaBlock({
   alt: string;
   onDownload: () => void;
 }) {
+  if (media.media?.kind === "file") {
+    const name = media.media.name ?? "file";
+    const ready = media.status === "ready" && !!media.url;
+    const sub = mine ? "text-accent-ink/70" : "text-faint";
+    return (
+      <div
+        className="flex items-center gap-3 px-3 py-2.5"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <span
+          className={`grid h-9 w-9 shrink-0 place-items-center rounded-lg text-base ${
+            mine ? "bg-accent-ink/15" : "bg-foreground/10"
+          }`}
+        >
+          📄
+        </span>
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-sm">{name}</p>
+          <p className={`truncate text-[0.65rem] ${sub}`}>
+            {media.status === "error"
+              ? "couldn't load"
+              : fmtBytes(media.media.size) + (ready ? "" : " · decrypting…")}
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onDownload();
+          }}
+          disabled={!ready}
+          aria-label="Download file"
+          className={`shrink-0 text-sm disabled:opacity-40 ${sub}`}
+        >
+          ↓
+        </button>
+      </div>
+    );
+  }
+
   const isAudio = media.media?.kind === "audio";
 
   if (media.status === "loading" && !media.url) {

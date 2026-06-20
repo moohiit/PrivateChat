@@ -224,7 +224,8 @@ workaround so the server never sees plaintext.
 ### 🟡 Messaging power features (~a day each)
 - [x] **Voice messages** — record via MediaRecorder → encrypt → R2 (same pipeline as photos,
       `MediaRef.kind: "audio"`); inline player + download. Mic button in the composer.
-- [ ] **Any-file sharing** (PDFs/docs) — generalize `MediaRef` beyond images.
+- [x] **Any-file sharing** (PDFs/docs/etc.) — 📎 attach button; encrypt → R2 (kind "file"
+      + original name); recipient gets a file card with size + download. ≤7 MB.
 - [ ] **Message search** — client-side over decrypted history (stays E2E).
 - [ ] **Edit messages** + "edited" marker.
 - [ ] **Profile**: display name + avatar (public or encrypted blob).

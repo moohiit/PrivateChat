@@ -75,10 +75,11 @@ export type MediaRef = {
   iv: string; // AES-GCM iv (base64) for the bytes
   mime: string; // e.g. "image/webp" or "audio/webm"
   size: number; // plaintext byte size (for display)
-  kind?: "image" | "audio"; // defaults to image (back-compat)
+  kind?: "image" | "audio" | "file"; // defaults to image (back-compat)
   width?: number; // images
   height?: number; // images
   duration?: number; // audio: seconds
+  name?: string; // files: original filename
 };
 
 /** A persisted message (ciphertext only) stored in DO storage. */
