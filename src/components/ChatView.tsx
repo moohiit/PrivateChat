@@ -33,6 +33,66 @@ function fmtBytes(n: number): string {
   return `${(n / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+/* --- Inline icons (stroke = currentColor so they inherit button color) --- */
+
+function IconImage() {
+  return (
+    <svg
+      width="20"
+      height="20"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <rect x="3" y="3" width="18" height="18" rx="2.5" />
+      <circle cx="8.5" cy="8.5" r="1.6" />
+      <path d="M21 15l-5-5L5 21" />
+    </svg>
+  );
+}
+
+function IconPaperclip() {
+  return (
+    <svg
+      width="20"
+      height="20"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d="M21.44 11.05l-9.19 9.19a5 5 0 0 1-7.07-7.07l9.19-9.19a3.5 3.5 0 0 1 4.95 4.95l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+    </svg>
+  );
+}
+
+function IconMic() {
+  return (
+    <svg
+      width="20"
+      height="20"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <rect x="9" y="2" width="6" height="12" rx="3" />
+      <path d="M5 10a7 7 0 0 0 14 0" />
+      <path d="M12 17v4" />
+    </svg>
+  );
+}
+
 export default function ChatView({
   conversation,
   selfUserId,
@@ -57,6 +117,7 @@ export default function ChatView({
     sendFile,
     deleteMessages,
     react,
+    editMessage,
     setTyping,
     setPersist,
     setDisappear,
@@ -67,6 +128,7 @@ export default function ChatView({
   const [selecting, setSelecting] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [replyTo, setReplyTo] = useState<ChatMessage | null>(null);
+  const [editing, setEditing] = useState<ChatMessage | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [recording, setRecording] = useState(false);
   const [recSecs, setRecSecs] = useState(0);
@@ -141,9 +203,26 @@ export default function ChatView({
   function submit(e: React.FormEvent) {
     e.preventDefault();
     if (!draft.trim()) return;
-    void sendText(draft, replyTo?.id);
+    if (editing) {
+      void editMessage(editing.id, draft);
+      setEditing(null);
+    } else {
+      void sendText(draft, replyTo?.id);
+      setReplyTo(null);
+    }
     setDraft("");
+    setTyping(false);
+  }
+
+  function startEdit(m: ChatMessage) {
     setReplyTo(null);
+    setEditing(m);
+    setDraft(m.text);
+  }
+
+  function cancelEdit() {
+    setEditing(null);
+    setDraft("");
     setTyping(false);
   }
 
@@ -373,6 +452,7 @@ export default function ChatView({
             quoted={quotedFor(m)}
             onReply={() => setReplyTo(m)}
             onReact={(emoji) => react(m.id, emoji)}
+            onEdit={() => startEdit(m)}
           />
         ))}
         {peerTyping && (
@@ -384,8 +464,26 @@ export default function ChatView({
         )}
       </div>
 
+      {/* Editing context */}
+      {editing && (
+        <div className="flex items-center gap-2 border-t border-border-soft bg-surface-strong px-4 py-2">
+          <span className="h-8 w-0.5 shrink-0 rounded bg-warn" aria-hidden />
+          <div className="min-w-0 flex-1">
+            <p className="text-[0.65rem] text-warn">Editing message</p>
+            <p className="truncate text-xs text-faint">{editing.text}</p>
+          </div>
+          <button
+            onClick={cancelEdit}
+            aria-label="Cancel edit"
+            className="btn-ghost grid h-7 w-7 place-items-center rounded-lg text-xs"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
       {/* Reply context */}
-      {replyTo && (
+      {!editing && replyTo && (
         <div className="flex items-center gap-2 border-t border-border-soft bg-surface-strong px-4 py-2">
           <span className="h-8 w-0.5 shrink-0 rounded bg-accent" aria-hidden />
           <div className="min-w-0 flex-1">
@@ -455,18 +553,18 @@ export default function ChatView({
             onClick={() => fileRef.current?.click()}
             disabled={!keyReady}
             aria-label="Attach photo"
-            className="btn-ghost grid h-10 w-10 shrink-0 place-items-center rounded-[0.625rem] text-base disabled:opacity-50"
+            className="btn-ghost grid h-10 w-10 shrink-0 place-items-center rounded-[0.625rem] disabled:opacity-50"
           >
-            🖼
+            <IconImage />
           </button>
           <button
             type="button"
             onClick={() => docRef.current?.click()}
             disabled={!keyReady}
             aria-label="Attach file"
-            className="btn-ghost grid h-10 w-10 shrink-0 place-items-center rounded-[0.625rem] text-base disabled:opacity-50"
+            className="btn-ghost grid h-10 w-10 shrink-0 place-items-center rounded-[0.625rem] disabled:opacity-50"
           >
-            📎
+            <IconPaperclip />
           </button>
           <input
             value={draft}
@@ -475,7 +573,13 @@ export default function ChatView({
               setTyping(e.target.value.length > 0);
             }}
             onBlur={() => setTyping(false)}
-            placeholder={keyReady ? "Write a message…" : "Encryption unavailable"}
+            placeholder={
+              !keyReady
+                ? "Encryption unavailable"
+                : editing
+                  ? "Edit message…"
+                  : "Write a message…"
+            }
             disabled={!keyReady}
             aria-label={`Message to ${peer.username}`}
             className="field min-w-0 flex-1 px-3 py-2.5 text-base text-foreground sm:text-sm"
@@ -487,7 +591,7 @@ export default function ChatView({
               disabled={!keyReady}
               className="btn-accent shrink-0 rounded-[0.625rem] px-4 py-2.5 text-sm font-semibold"
             >
-              Send
+              {editing ? "Save" : "Send"}
             </button>
           ) : (
             <button
@@ -495,9 +599,9 @@ export default function ChatView({
               onClick={startRecording}
               disabled={!keyReady}
               aria-label="Record voice message"
-              className="btn-ghost grid h-10 w-10 shrink-0 place-items-center rounded-[0.625rem] text-base disabled:opacity-50"
+              className="btn-ghost grid h-10 w-10 shrink-0 place-items-center rounded-[0.625rem] disabled:opacity-50"
             >
-              🎤
+              <IconMic />
             </button>
           )}
         </form>
@@ -522,6 +626,7 @@ function Bubble({
   quoted,
   onReply,
   onReact,
+  onEdit,
 }: {
   m: ChatMessage;
   selecting: boolean;
@@ -532,6 +637,7 @@ function Bubble({
   quoted: { mine: boolean; text: string } | null;
   onReply: () => void;
   onReact: (emoji: string) => void;
+  onEdit: () => void;
 }) {
   const [menu, setMenu] = useState(false);
 
@@ -601,6 +707,7 @@ function Bubble({
                 ⏱
               </span>
             )}
+            {m.editedAt && <span title="edited">edited</span>}
             {formatTime(m.sentAt)}
             {m.mine && <StatusTick status={m.status} />}
           </span>
@@ -666,6 +773,18 @@ function Bubble({
           >
             ↩
           </button>
+          {m.mine && m.text && !m.image && (
+            <button
+              onClick={() => {
+                onEdit();
+                setMenu(false);
+              }}
+              aria-label="Edit"
+              className="px-1 text-sm text-muted hover:text-foreground"
+            >
+              ✎
+            </button>
+          )}
         </div>
       )}
     </div>

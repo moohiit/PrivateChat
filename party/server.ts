@@ -204,6 +204,31 @@ export class ConversationServer extends Server<Env> {
         }
         return;
       }
+      case "message:edit": {
+        if (typeof msg.ciphertext !== "string" || msg.ciphertext.length > MAX_CIPHERTEXT) {
+          return;
+        }
+        if (typeof msg.iv !== "string") return;
+        const editedAt = Date.now();
+        this.broadcastExcept(connection.id, {
+          type: "message:edited",
+          id: msg.id,
+          from: me.userId,
+          ciphertext: msg.ciphertext,
+          iv: msg.iv,
+          editedAt,
+        });
+        if (this.effectivePersist()) {
+          await this.updateStoredText(
+            msg.id,
+            me.userId,
+            msg.ciphertext,
+            msg.iv,
+            editedAt,
+          );
+        }
+        return;
+      }
       case "receipt":
         this.broadcastExcept(connection.id, {
           type: "receipt",
@@ -310,6 +335,23 @@ export class ConversationServer extends Server<Env> {
     });
     const all = [...map.values()].sort((a, b) => a.sentAt - b.sentAt);
     return all.slice(-MAX_HISTORY);
+  }
+
+  /** Update a stored message's text (edit). Only the original author may edit. */
+  private async updateStoredText(
+    id: string,
+    userId: string,
+    ciphertext: string,
+    iv: string,
+    editedAt: number,
+  ): Promise<void> {
+    const map = await this.ctx.storage.list<StoredMessage>({ prefix: MSG_PREFIX });
+    for (const [k, m] of map) {
+      if (m.id !== id) continue;
+      if (m.from !== userId) return; // not the author
+      await this.ctx.storage.put(k, { ...m, ciphertext, iv, editedAt });
+      return;
+    }
   }
 
   /** Update a stored message's reaction (so it survives reloads). */

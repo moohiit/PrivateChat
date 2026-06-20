@@ -93,6 +93,7 @@ export type StoredMessage = {
   expiresAt?: number; // disappearing messages: epoch ms when it auto-deletes
   replyTo?: string; // id of the message this one quotes
   reactions?: Record<string, string>; // userId -> emoji (one per user)
+  editedAt?: number; // set when the text was edited
 };
 
 /** An item to delete: message id + its media id (so the blob can be removed). */
@@ -115,6 +116,7 @@ export type ChatClientMessage =
   | { type: "message:delete"; items: DeleteItem[] }
   | { type: "disappear:set"; ttl: number } // ttl ms; 0 = off
   | { type: "reaction"; id: string; emoji: string; op: "add" | "remove" }
+  | { type: "message:edit"; id: string; ciphertext: string; iv: string }
   | { type: "history:clear" };
 
 /** Conversation room: messages the server pushes. */
@@ -141,6 +143,14 @@ export type ChatServerMessage =
       from: string;
       emoji: string;
       op: "add" | "remove";
+    }
+  | {
+      type: "message:edited";
+      id: string;
+      from: string;
+      ciphertext: string;
+      iv: string;
+      editedAt: number;
     }
   | { type: "history"; messages: StoredMessage[] }
   | { type: "messages:deleted"; ids: string[] }

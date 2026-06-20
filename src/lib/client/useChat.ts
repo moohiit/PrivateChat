@@ -22,6 +22,7 @@ export type ChatImage = {
 
 export type ChatMessage = {
   id: string;
+  from: string;
   mine: boolean;
   text: string;
   sentAt: number;
@@ -30,6 +31,7 @@ export type ChatMessage = {
   expiresAt?: number;
   replyTo?: string;
   reactions: Record<string, string>; // userId -> emoji
+  editedAt?: number;
 };
 
 export type ChatState = {
@@ -204,6 +206,7 @@ export function useChat(
             if (s.messages.some((m) => m.id === msg.id)) return s;
             const incoming: ChatMessage = {
               id: msg.id,
+              from: msg.from,
               mine: false,
               text,
               sentAt: msg.sentAt,
@@ -268,6 +271,29 @@ export function useChat(
             }),
           }));
           return;
+        case "message:edited": {
+          let text = "";
+          if (aesKey) {
+            try {
+              text = await decryptMessage(aesKey, {
+                ciphertext: msg.ciphertext,
+                iv: msg.iv,
+              });
+            } catch {
+              text = "⚠️ could not decrypt message";
+            }
+          }
+          setState((s) => ({
+            ...s,
+            messages: s.messages.map((m) =>
+              // only the original author may edit a message
+              m.id === msg.id && m.from === msg.from && !m.image
+                ? { ...m, text, editedAt: msg.editedAt }
+                : m,
+            ),
+          }));
+          return;
+        }
         case "messages:deleted":
           removeMessages(msg.ids);
           return;
@@ -287,6 +313,7 @@ export function useChat(
             }
             decrypted.push({
               id: m.id,
+              from: m.from,
               mine: m.from === selfUserId,
               text,
               sentAt: m.sentAt,
@@ -294,6 +321,7 @@ export function useChat(
               expiresAt: m.expiresAt,
               replyTo: m.replyTo,
               reactions: m.reactions ?? {},
+              editedAt: m.editedAt,
               image: m.media
                 ? { media: m.media, url: null, status: "loading" }
                 : undefined,
@@ -340,6 +368,7 @@ export function useChat(
         disappearRef.current > 0 ? sentAt + disappearRef.current : undefined;
       const optimistic: ChatMessage = {
         id,
+        from: selfUserId,
         mine: true,
         text: trimmed,
         sentAt,
@@ -381,6 +410,7 @@ export function useChat(
       const localUrl = trackUrl(URL.createObjectURL(file));
       const optimistic: ChatMessage = {
         id,
+        from: selfUserId,
         mine: true,
         text: "",
         sentAt,
@@ -431,6 +461,7 @@ export function useChat(
       const localUrl = trackUrl(URL.createObjectURL(blob));
       const optimistic: ChatMessage = {
         id,
+        from: selfUserId,
         mine: true,
         text: "",
         sentAt,
@@ -488,6 +519,7 @@ export function useChat(
       const localUrl = trackUrl(URL.createObjectURL(file));
       const optimistic: ChatMessage = {
         id,
+        from: selfUserId,
         mine: true,
         text: "",
         sentAt,
@@ -604,6 +636,29 @@ export function useChat(
     [selfUserId],
   );
 
+  // Edit the text of one of my own messages (re-encrypts + broadcasts).
+  const editMessage = useCallback(
+    async (messageId: string, newText: string) => {
+      const trimmed = newText.trim();
+      if (!trimmed || !key) return;
+      const target = messagesRef.current.find((x) => x.id === messageId);
+      if (!target || !target.mine || target.image) return;
+      if (trimmed === target.text) return;
+      const editedAt = Date.now();
+      const { ciphertext, iv } = await encryptMessage(key, trimmed);
+      socketRef.current?.send(
+        JSON.stringify({ type: "message:edit", id: messageId, ciphertext, iv }),
+      );
+      setState((s) => ({
+        ...s,
+        messages: s.messages.map((m) =>
+          m.id === messageId ? { ...m, text: trimmed, editedAt } : m,
+        ),
+      }));
+    },
+    [key],
+  );
+
   return {
     ...state,
     selfUserId,
@@ -614,6 +669,7 @@ export function useChat(
     sendFile,
     deleteMessages,
     react,
+    editMessage,
     setTyping,
     setPersist,
     setDisappear,
